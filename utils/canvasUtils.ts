@@ -22,14 +22,17 @@ export const generateCardSprite = async (analysis: FoodAnalysis): Promise<string
   const baseH = 260;
   const cardH = baseH + headerH;
   
-  canvas.width = baseW * scale;
-  canvas.height = cardH * scale + 50; // +buffer for shadows
+  // Padding to prevent shadow clipping (Shadow Blur 20 * Scale 2 = 40px)
+  const padding = 40;
+
+  canvas.width = baseW * scale + padding * 2;
+  canvas.height = cardH * scale + padding * 2; 
 
   const ctx = canvas.getContext("2d");
   if (!ctx) return "";
 
-  // Draw at 0,0 with the given scale
-  drawNutritionCardInternal(ctx, analysis, 0, 0, scale);
+  // Draw with offset to capture top/left shadows
+  drawNutritionCardInternal(ctx, analysis, padding, padding, scale);
   
   return canvas.toDataURL("image/png");
 };
@@ -48,7 +51,7 @@ export const generateLabelSprite = async (text: string): Promise<string> => {
   const metrics = ctx.measureText(text);
   
   const paddingX = 16 * 2;
-  const paddingY = 10 * 2;
+  // const paddingY = 10 * 2;
   const w = metrics.width + paddingX * 2;
   const h = fontSize * 1.6;
   
@@ -77,11 +80,14 @@ export const generateTitleSprite = async (text: string): Promise<string> => {
   ctx.font = `bold ${fontSize}px Inter, sans-serif`;
   const metrics = ctx.measureText(text);
   
-  canvas.width = metrics.width + 40;
-  canvas.height = fontSize * 1.5 + 40;
+  const padding = 40; // Shadow buffer
+
+  canvas.width = metrics.width + padding * 2;
+  canvas.height = fontSize * 1.5 + padding * 2;
   
   const ctx2 = canvas.getContext("2d")!;
-  drawMealTypeInternal(ctx2, text, canvas.width/2, 20, 2.0);
+  // Center X, Offset Y
+  drawMealTypeInternal(ctx2, text, canvas.width/2, padding, 2.0);
 
   return canvas.toDataURL("image/png");
 };
@@ -116,12 +122,9 @@ export const renderFinalImage = async (
         // Apply Modifier to User Scale to get Effective Scale
         const s = layout.mealType.scale * refScale * TITLE_SCALE_MODIFIER;
         
-        // Adjust Y for padding used in Sprite. 
-        // 20px padding at Scale 2.0 -> Padding Ratio is roughly 1/8th of Font Size.
-        // Visually we offset the sprite top. 
-        // We need to shift the drawing Y down by the effective padding amount.
-        // Effective padding = 10 * s (derived from visual scale equivalence logic)
-        const y = layout.mealType.y * canvas.height + (10 * s); 
+        // Adjust Y for padding used in Sprite (40px at Scale 2.0). 
+        // Logic: 40px * (s / 2.0) = 20 * s.
+        const y = layout.mealType.y * canvas.height + (20 * s); 
         
         drawMealTypeInternal(ctx, layout.mealType.text || analysis.mealType, x, y, s);
       }
@@ -161,10 +164,19 @@ export const renderFinalImage = async (
 
       // 4. Draw Nutrition Card
       if (layout.card.visible) {
-        const x = layout.card.x * canvas.width;
-        const y = layout.card.y * canvas.height;
-        // Apply Modifier
+        // Adjust Position for Shadow Padding used in Sprite
         const s = layout.card.scale * refScale * CARD_SCALE_MODIFIER;
+        
+        // Sprite Padding was 40px at Scale 2.0.
+        // Effective offset = 40 * (s / 2.0) = 20 * s.
+        // Layout X/Y corresponds to the top-left of the Sprite (Shadow Buffer).
+        // Actual Card Content needs to be drawn shifted by this offset.
+        const offsetX = 20 * s;
+        const offsetY = 20 * s;
+
+        const x = layout.card.x * canvas.width + offsetX;
+        const y = layout.card.y * canvas.height + offsetY;
+        
         drawNutritionCardInternal(ctx, analysis, x, y, s);
       }
 
@@ -196,7 +208,8 @@ export const getInitialLayout = (
   const defaultCardScale = 4.2;
   
   // Card dimensions logic
-  const cardScaleRef = Math.max(imgWidth, imgHeight) / 1200;
+  // CHANGED: Use imgWidth only. Previous use of Math.max caused scaling mismatch on portrait images.
+  const cardScaleRef = imgWidth / 1200;
   
   // Calculate height with default scale AND Modifier
   // Base H (330) * Ref * (UserScale * Modifier)
@@ -205,11 +218,16 @@ export const getInitialLayout = (
   // Margin 32px
   const margin_px = 32 * cardScaleRef;
   
-  const cardX = margin_px / imgWidth;
+  // Calculate X. Note: Since we use padded sprites, the layout x is top-left of the padding.
+  // The content starts ~20px inside (relative to scale).
+  // We can reduce margin slightly to keep visual alignment similar.
+  const visualMarginX = Math.max(0, margin_px - (20 * (defaultCardScale * cardScaleRef * CARD_SCALE_MODIFIER)));
+  const cardX = visualMarginX / imgWidth;
   
   // Position it at bottom with margin
   let cardY = (imgHeight - cardH_px - margin_px) / imgHeight;
   
+  // Safety check
   if (cardY < 0) cardY = 0.05;
 
   const card: ElementState = {
@@ -285,7 +303,7 @@ function measureLabel(ctx: CanvasRenderingContext2D, text: string, scale: number
     ctx.font = `600 ${fontSize}px Inter, sans-serif`;
     const metrics = ctx.measureText(text);
     const paddingX = 16 * scale;
-    const paddingY = 10 * scale;
+    // const paddingY = 10 * scale;
     const w = metrics.width + (paddingX * 2);
     const h = fontSize * 1.6;
     return { w, h };
