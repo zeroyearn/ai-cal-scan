@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState } from './types';
 import { analyzeFoodImage } from './services/geminiService';
 import { resizeImage, getInitialLayout, generateCardSprite, generateLabelSprite, generateTitleSprite, renderFinalImage } from './utils/canvasUtils';
@@ -40,6 +40,9 @@ function App() {
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+  
+  // --- Batch Selection State ---
+  const [batchSelection, setBatchSelection] = useState<Set<string>>(new Set());
 
   // --- Export Settings ---
   const [exportTag, setExportTag] = useState("Food");
@@ -228,6 +231,47 @@ function App() {
     }
   }, [googleApiKey, googleClientId]);
 
+  // Picker for selecting a destination folder for upload
+  const createFolderPicker = useCallback((token: string, onFolderSelect: (folderId: string) => void) => {
+    try {
+      const google = (window as any).google;
+      const showPicker = () => {
+         // ViewId.FOLDERS allows selecting folders
+         const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+            .setSelectFolderEnabled(true)
+            .setIncludeFolders(true)
+            .setMimeTypes('application/vnd.google-apps.folder');
+
+         const picker = new google.picker.PickerBuilder()
+            .setDeveloperKey(googleApiKey)
+            .setAppId(googleClientId)
+            .setOAuthToken(token)
+            .addView(view)
+            .setCallback((data: any) => {
+               if (data.action === google.picker.Action.PICKED) {
+                  const doc = data.docs[0];
+                  if (doc) onFolderSelect(doc.id);
+               }
+            })
+            .setTitle("Select Destination Folder")
+            .build();
+         picker.setVisible(true);
+      };
+      
+      if (!google || !google.picker) {
+         const gapi = (window as any).gapi;
+         if (gapi) {
+            gapi.load('picker', showPicker);
+         }
+      } else {
+         showPicker();
+      }
+    } catch(e: any) {
+        console.error(e);
+        alert("Failed to open folder picker: " + e.message);
+    }
+  }, [googleApiKey, googleClientId]);
+
   const handleDriveImport = async () => {
     if (!googleClientId || !googleApiKey) {
       setShowDriveSettings(true);
@@ -253,7 +297,7 @@ function App() {
   const handleSaveToDrive = async () => {
     if (!selectedImage || !selectedImage.layout || !selectedImage.analysis) return;
 
-    const performUpload = async (token: string) => {
+    const performUpload = async (token: string, folderId: string) => {
         setIsUploading(true);
         try {
             const url = await renderFinalImage(selectedImage.previewUrl, selectedImage.analysis, selectedImage.layout);
@@ -266,6 +310,7 @@ function App() {
             const metadata = {
                 name: fileName,
                 mimeType: 'image/jpeg',
+                parents: [folderId] // Specify user-selected folder as parent
             };
 
             const formData = new FormData();
@@ -292,11 +337,114 @@ function App() {
         }
     };
 
+    const startSaveProcess = (token: string) => {
+        // Open folder picker first, then upload
+        createFolderPicker(token, (folderId) => performUpload(token, folderId));
+    };
+
     if (accessToken) {
-        performUpload(accessToken);
+        startSaveProcess(accessToken);
     } else {
         // Need auth
-        requestGoogleAuth((token) => performUpload(token));
+        requestGoogleAuth((token) => startSaveProcess(token));
+    }
+  };
+
+  // --- Batch Operations ---
+
+  const toggleSelection = (id: string) => {
+    const newSet = new Set(batchSelection);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setBatchSelection(newSet);
+  };
+
+  const toggleSelectAll = () => {
+    if (batchSelection.size === images.length && images.length > 0) {
+      setBatchSelection(new Set());
+    } else {
+      setBatchSelection(new Set(images.map(i => i.id)));
+    }
+  };
+
+  const handleBatchSaveToDrive = async () => {
+    const selectedIds = Array.from(batchSelection);
+    const imagesToSave = images.filter(img => selectedIds.includes(img.id) && img.status === 'complete');
+
+    if (imagesToSave.length === 0) {
+        alert("No completed images selected to save.");
+        return;
+    }
+
+    const performBatchUpload = async (token: string, folderId: string) => {
+        setIsUploading(true);
+        let successCount = 0;
+        let failCount = 0;
+
+        try {
+            const date = new Date().toISOString().split('T')[0];
+            const safeTag = exportTag.trim().replace(/[\/\\:*?"<>|]/g, '') || "Style";
+
+            for (let i = 0; i < imagesToSave.length; i++) {
+                const img = imagesToSave[i];
+                try {
+                     if (!img.layout || !img.analysis) continue;
+
+                     // Render
+                     const url = await renderFinalImage(img.previewUrl, img.analysis, img.layout);
+                     const blob = dataURLtoBlob(url);
+
+                     // Name: Date-Tag-OriginalName.jpg (Ensures uniqueness in batch)
+                     const originalNameWithoutExt = img.file.name.replace(/\.[^/.]+$/, "");
+                     const fileName = `${date}-${safeTag}-${originalNameWithoutExt}.jpg`;
+
+                     const metadata = {
+                        name: fileName,
+                        mimeType: 'image/jpeg',
+                        parents: [folderId]
+                    };
+
+                    const formData = new FormData();
+                    formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                    formData.append('file', blob);
+
+                    const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token}` },
+                        body: formData
+                    });
+
+                    if (!response.ok) throw new Error('Failed');
+                    successCount++;
+
+                } catch (err) {
+                    console.error(`Failed to upload ${img.file.name}`, err);
+                    failCount++;
+                }
+            }
+            
+            alert(`Batch Upload Complete!\n✅ Success: ${successCount}\n❌ Failed: ${failCount}`);
+
+        } catch (error: any) {
+            console.error(error);
+            alert("Batch upload critical error: " + error.message);
+        } finally {
+            setIsUploading(false);
+            setBatchSelection(new Set()); // Clear selection after processing
+        }
+    };
+
+    const startBatchProcess = (token: string) => {
+        createFolderPicker(token, (folderId) => performBatchUpload(token, folderId));
+    };
+
+    if (accessToken) {
+        startBatchProcess(accessToken);
+    } else {
+        requestGoogleAuth((token) => startBatchProcess(token));
     }
   };
 
@@ -377,6 +525,12 @@ function App() {
     e.stopPropagation();
     setImages(prev => prev.filter(img => img.id !== id));
     if (selectedImageId === id) setSelectedImageId(null);
+    // Remove from batch selection
+    setBatchSelection(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+    });
   };
 
   const selectedImage = images.find(img => img.id === selectedImageId);
@@ -667,9 +821,43 @@ function App() {
             </div>
           </div>
 
-          {/* List Header */}
-          <div className="px-6 py-2 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-            <span className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Queue ({images.length})</span>
+          {/* List Header with Batch Controls */}
+          <div className="flex flex-col px-6 py-4 border-b border-gray-100 bg-gray-50/50 gap-3">
+            <div className="flex justify-between items-center">
+                <span className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Queue ({images.length})</span>
+                <button 
+                  onClick={toggleSelectAll} 
+                  className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors"
+                  disabled={images.length === 0}
+                >
+                    {batchSelection.size === images.length && images.length > 0 ? 'Deselect All' : 'Select All'}
+                </button>
+            </div>
+            
+            {/* Batch Action Toolbar */}
+            {batchSelection.size > 0 && (
+                <div className="flex flex-col gap-2 animate-in slide-in-from-top-2 duration-200">
+                     <div className="flex items-center gap-2">
+                        <Tag size={14} className="text-gray-400" />
+                        <input 
+                            type="text" 
+                            value={exportTag}
+                            onChange={(e) => setExportTag(e.target.value)}
+                            className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:border-black focus:ring-1 focus:ring-black outline-none"
+                            placeholder="Style Tag (e.g. Food)"
+                            title="This tag will be used in the filename"
+                        />
+                     </div>
+                     <button 
+                        onClick={handleBatchSaveToDrive}
+                        disabled={isUploading}
+                        className="w-full flex items-center justify-center gap-2 bg-black text-white py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors shadow-sm"
+                     >
+                        {isUploading ? <Loader2 className="animate-spin" size={14}/> : <CloudUpload size={14} />}
+                        Save {batchSelection.size} to Drive
+                     </button>
+                </div>
+            )}
           </div>
 
           {/* Image List */}
@@ -684,12 +872,17 @@ function App() {
               <div
                 key={img.id}
                 onClick={() => setSelectedImageId(img.id)}
-                className={`relative group flex items-center gap-4 p-3 rounded-xl border transition-all cursor-pointer ${
+                className={`relative group flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
                   selectedImageId === img.id
                     ? 'border-green-500 bg-green-50/30 ring-1 ring-green-500'
                     : 'border-gray-200 hover:border-gray-300 bg-white'
                 }`}
               >
+                {/* Batch Selection Checkbox */}
+                <div onClick={(e) => { e.stopPropagation(); toggleSelection(img.id); }} className="cursor-pointer text-gray-300 hover:text-black transition-colors">
+                    {batchSelection.has(img.id) ? <CheckSquare size={20} className="text-black" /> : <Square size={20} />}
+                </div>
+
                 <div className="w-16 h-16 shrink-0 rounded-lg overflow-hidden bg-gray-100 relative">
                   <img src={img.previewUrl} alt="preview" className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
