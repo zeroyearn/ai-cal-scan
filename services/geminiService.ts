@@ -55,9 +55,22 @@ export async function analyzeFoodImage(base64Image: string, mimeType: string, ap
   
   // Instantiate client with the specific key and optional base URL
   const clientConfig: any = { apiKey: effectiveKey };
+  
   if (baseUrl && baseUrl.trim().length > 0) {
-    clientConfig.baseUrl = baseUrl.trim();
+    let url = baseUrl.trim();
+    // Remove trailing slash to ensure clean path concatenation by SDK
+    if (url.endsWith('/')) {
+        url = url.slice(0, -1);
+    }
+    clientConfig.baseUrl = url;
   }
+
+  // Support for Third-Party Aggregators (OneAPI, NewAPI, etc.)
+  // These services often require the API Key in the 'Authorization: Bearer' header 
+  // in addition to (or instead of) the standard 'x-goog-api-key'.
+  clientConfig.customHeaders = {
+    'Authorization': `Bearer ${effectiveKey}`
+  };
 
   const ai = new GoogleGenAI(clientConfig);
 
