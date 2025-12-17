@@ -976,7 +976,8 @@ function App() {
                           <div
                             onMouseDown={(e) => handleDragStart(e, 'title')}
                             onDoubleClick={() => handleTextEdit('title')}
-                            className="absolute z-20 cursor-move pointer-events-auto hover:brightness-95 transition-filter origin-top-center"
+                            // FIXED: Use origin-top instead of origin-top-center to match Canvas textBaseline="top"
+                            className="absolute z-20 cursor-move pointer-events-auto hover:brightness-95 transition-filter origin-top"
                             style={{
                               left: `${selectedImage.layout.mealType.x * 100}%`,
                               top: `${selectedImage.layout.mealType.y * 100}%`,
@@ -998,7 +999,8 @@ function App() {
                               transform: `scale(${getVisualScale(selectedImage.layout.card.scale, 'card')})`,
                             }}
                           >
-                            <img src={cardSprite} alt="Nutrition Card" className="pointer-events-none shadow-xl" />
+                            {/* REMOVED: shadow-xl (Double shadow fix) */}
+                            <img src={cardSprite} alt="Nutrition Card" className="pointer-events-none" />
                           </div>
                         )}
 
@@ -1016,7 +1018,8 @@ function App() {
                                   transform: `translate(-50%, -50%) scale(${getVisualScale(l.scale, 'label')})`, // Centered on coordinate
                                 }}
                             >
-                                <img src={labelSprites[l.id]} alt="Label" className="pointer-events-none drop-shadow-md" />
+                                {/* REMOVED: drop-shadow-md (Double shadow fix) */}
+                                <img src={labelSprites[l.id]} alt="Label" className="pointer-events-none" />
                                 {/* Delete Button on Canvas */}
                                 <button 
                                     className="absolute -top-3 -right-3 bg-red-500 text-white rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity hover:scale-110 pointer-events-auto"
