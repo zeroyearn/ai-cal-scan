@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState } from './types';
 import { analyzeFoodImage } from './services/geminiService';
 import { resizeImage, getInitialLayout, generateCardSprite, generateLabelSprite, generateTitleSprite, renderFinalImage } from './utils/canvasUtils';
@@ -70,6 +70,7 @@ function App() {
   const [googleClientId, setGoogleClientId] = useState(DEFAULT_GOOGLE_CLIENT_ID);
   const [googleApiKey, setGoogleApiKey] = useState(DEFAULT_API_KEY); // Google Picker API Key
   const [geminiApiKey, setGeminiApiKey] = useState(process.env.API_KEY || ""); // Gemini API Key
+  const [geminiApiUrl, setGeminiApiUrl] = useState(""); // Gemini API Base URL
   const [copied, setCopied] = useState(false);
 
   // Cache Access Token to avoid re-auth popups
@@ -82,16 +83,19 @@ function App() {
     const storedId = localStorage.getItem('aical_google_client_id');
     const storedKey = localStorage.getItem('aical_google_api_key');
     const storedGeminiKey = localStorage.getItem('aical_gemini_api_key');
+    const storedGeminiUrl = localStorage.getItem('aical_gemini_api_url');
 
     if (storedId) setGoogleClientId(storedId);
     if (storedKey) setGoogleApiKey(storedKey);
     if (storedGeminiKey) setGeminiApiKey(storedGeminiKey);
+    if (storedGeminiUrl) setGeminiApiUrl(storedGeminiUrl);
   }, []);
 
   const saveSettings = () => {
     localStorage.setItem('aical_google_client_id', googleClientId);
     localStorage.setItem('aical_google_api_key', googleApiKey);
     localStorage.setItem('aical_gemini_api_key', geminiApiKey);
+    localStorage.setItem('aical_gemini_api_url', geminiApiUrl);
     // Clear token if settings change to force re-auth with new ID
     setAccessToken(null);
     tokenClientRef.current = null;
@@ -481,49 +485,57 @@ function App() {
     return () => observer.disconnect();
   }, [editorContainerRef]);
 
+  // --- Process Images Function (Updated for Concurrency) ---
   const processImages = async () => {
     setIsProcessing(true);
     const imagesToProcess = images.filter(img => img.status === 'idle' || img.status === 'error');
+    
+    // Concurrency Limit (3 images at a time)
+    const BATCH_SIZE = 3; 
 
-    for (const imgData of imagesToProcess) {
-      try {
-        setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'analyzing' } : p));
+    // Helper to process a single image
+    const processSingleImage = async (imgData: ProcessedImage) => {
+        try {
+            setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'analyzing' } : p));
 
-        const { base64: base64Data, mimeType } = await resizeImage(imgData.file);
-        
-        // Update the preview URL to the resized version to ensure Orientation/Dimensions match 
-        // what Gemin and Canvas sees (Canvas strips EXIF, <img src=file> keeps it).
-        // This prevents layout shifts due to rotation.
-        const correctedPreviewUrl = `data:${mimeType};base64,${base64Data}`;
+            const { base64: base64Data, mimeType } = await resizeImage(imgData.file);
+            const correctedPreviewUrl = `data:${mimeType};base64,${base64Data}`;
 
-        // Pass Gemini Key
-        const analysis = await analyzeFoodImage(base64Data, mimeType, geminiApiKey);
+            // Pass Gemini Key and Base URL
+            const analysis = await analyzeFoodImage(base64Data, mimeType, geminiApiKey, geminiApiUrl);
 
-        if (!analysis.isFood) {
-          setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'not-food', error: 'Not recognized as food' } : p));
-          continue;
+            if (!analysis.isFood) {
+                setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'not-food', error: 'Not recognized as food' } : p));
+                return;
+            }
+
+            const img = new Image();
+            img.src = correctedPreviewUrl;
+            await new Promise(r => img.onload = r);
+            const layout = getInitialLayout(img.width, img.height, analysis);
+
+            setImages(prev => prev.map(p => p.id === imgData.id ? { 
+                ...p, 
+                previewUrl: correctedPreviewUrl,
+                status: 'complete', 
+                analysis,
+                layout
+            } : p));
+
+        } catch (error: any) {
+            console.error(error);
+            const errorMsg = error.message || 'Processing failed';
+            setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'error', error: errorMsg } : p));
         }
+    };
 
-        // Generate Initial Layout based on original image dimensions (which match the corrected preview)
-        const img = new Image();
-        img.src = correctedPreviewUrl;
-        await new Promise(r => img.onload = r);
-        const layout = getInitialLayout(img.width, img.height, analysis);
-
-        setImages(prev => prev.map(p => p.id === imgData.id ? { 
-          ...p, 
-          previewUrl: correctedPreviewUrl, // Use corrected URL
-          status: 'complete', 
-          analysis,
-          layout // Store layout for editing
-        } : p));
-
-      } catch (error: any) {
-        console.error(error);
-        const errorMsg = error.message || 'Processing failed';
-        setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'error', error: errorMsg } : p));
-      }
+    // Process in batches
+    for (let i = 0; i < imagesToProcess.length; i += BATCH_SIZE) {
+        const batch = imagesToProcess.slice(i, i + BATCH_SIZE);
+        // Wait for all requests in this batch to finish before starting the next batch
+        await Promise.all(batch.map(img => processSingleImage(img)));
     }
+
     setIsProcessing(false);
   };
 
@@ -1241,20 +1253,41 @@ function App() {
                         Gemini AI Configuration
                     </h3>
                     
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Gemini API Key
-                        </label>
-                        <input 
-                            type="password"
-                            value={geminiApiKey}
-                            onChange={(e) => setGeminiApiKey(e.target.value)}
-                            placeholder="AIza..."
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono"
-                        />
-                        <p className="text-xs text-gray-500 mt-1">
-                            Required for image analysis. <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-purple-600 hover:underline">Get a key here</a>.
-                        </p>
+                    <div className="space-y-4">
+                      <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Gemini API Key
+                          </label>
+                          <input 
+                              type="password"
+                              value={geminiApiKey}
+                              onChange={(e) => setGeminiApiKey(e.target.value)}
+                              placeholder="AIza..."
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">
+                              Required for image analysis. <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-purple-600 hover:underline">Get a key here</a>.
+                          </p>
+                      </div>
+
+                      <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                             Gemini API Base URL <span className="text-xs text-gray-400 font-normal">(Optional)</span>
+                          </label>
+                          <div className="relative">
+                            <Globe className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                            <input 
+                                type="text"
+                                value={geminiApiUrl}
+                                onChange={(e) => setGeminiApiUrl(e.target.value)}
+                                placeholder="https://generativelanguage.googleapis.com"
+                                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono"
+                            />
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                              Useful if you are using a reverse proxy or custom gateway.
+                          </p>
+                      </div>
                     </div>
                 </div>
 

@@ -43,7 +43,7 @@ const analysisSchema: Schema = {
 // Helper function to wait
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-export async function analyzeFoodImage(base64Image: string, mimeType: string, apiKey?: string): Promise<FoodAnalysis> {
+export async function analyzeFoodImage(base64Image: string, mimeType: string, apiKey?: string, baseUrl?: string): Promise<FoodAnalysis> {
   const maxRetries = 3;
   let attempt = 0;
 
@@ -53,8 +53,13 @@ export async function analyzeFoodImage(base64Image: string, mimeType: string, ap
       throw new Error("Gemini API Key is missing. Please configure it in Settings.");
   }
   
-  // Instantiate client with the specific key for this request
-  const ai = new GoogleGenAI({ apiKey: effectiveKey });
+  // Instantiate client with the specific key and optional base URL
+  const clientConfig: any = { apiKey: effectiveKey };
+  if (baseUrl && baseUrl.trim().length > 0) {
+    clientConfig.baseUrl = baseUrl.trim();
+  }
+
+  const ai = new GoogleGenAI(clientConfig);
 
   while (attempt <= maxRetries) {
     try {
@@ -94,17 +99,20 @@ export async function analyzeFoodImage(base64Image: string, mimeType: string, ap
     } catch (error: any) {
       attempt++;
       
-      // Check if the error is related to overloading (503) or generic server errors (500)
+      // Check for 503 (Service Unavailable) or 429 (Too Many Requests)
       const isOverloaded = 
         error?.status === 503 || 
+        error?.status === 429 || 
         error?.message?.includes('503') || 
+        error?.message?.includes('429') || 
         error?.message?.toLowerCase().includes('overloaded') ||
-        error?.message?.toLowerCase().includes('unavailable');
+        error?.message?.toLowerCase().includes('unavailable') ||
+        error?.message?.toLowerCase().includes('quota');
 
       if (isOverloaded && attempt <= maxRetries) {
-        // Exponential backoff: 1000ms, 2000ms, 4000ms
+        // Exponential backoff: 1s, 2s, 4s...
         const waitTime = Math.pow(2, attempt - 1) * 1000;
-        console.warn(`Model overloaded (503). Retrying in ${waitTime}ms... (Attempt ${attempt}/${maxRetries})`);
+        console.warn(`Gemini API Busy/Rate Limit (${error.status || 'Error'}). Retrying in ${waitTime}ms... (Attempt ${attempt}/${maxRetries})`);
         await delay(waitTime);
         continue;
       }
