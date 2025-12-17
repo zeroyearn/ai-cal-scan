@@ -1,0 +1,5 @@
+{
+  "name": "AI Cal",
+  "description": "A bulk food image processing tool that detects food items, overlays labels, and generates nutrition cards automatically using Gemini Vision.",
+  "requestFramePermissions": []
+}
