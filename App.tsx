@@ -49,6 +49,10 @@ function App() {
   const [googleClientId, setGoogleClientId] = useState(DEFAULT_GOOGLE_CLIENT_ID);
   const [googleApiKey, setGoogleApiKey] = useState(DEFAULT_API_KEY);
   const [copied, setCopied] = useState(false);
+
+  // Cache Access Token to avoid re-auth popups
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const tokenClientRef = useRef<any>(null);
   
   useEffect(() => {
     const storedId = localStorage.getItem('aical_google_client_id');
@@ -60,6 +64,9 @@ function App() {
   const saveSettings = () => {
     localStorage.setItem('aical_google_client_id', googleClientId);
     localStorage.setItem('aical_google_api_key', googleApiKey);
+    // Clear token if settings change to force re-auth with new ID
+    setAccessToken(null);
+    tokenClientRef.current = null;
     setShowDriveSettings(false);
   };
 
@@ -69,46 +76,13 @@ function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDriveImport = async () => {
-    if (!googleClientId || !googleApiKey) {
-      setShowDriveSettings(true);
-      return;
-    }
-
-    setIsDriveLoading(true);
-
+  const createPicker = useCallback((token: string) => {
     try {
-      // 1. Initialize Google API Clients if not ready
-      const gapi = (window as any).gapi;
       const google = (window as any).google;
-
-      if (!gapi || !google) {
-        throw new Error("Google APIs not loaded yet. Please check your internet connection.");
+      if (!google || !google.picker) {
+         throw new Error("Google Picker API not loaded");
       }
 
-      // Load Picker API
-      await new Promise<void>((resolve) => gapi.load('picker', resolve));
-
-      // 2. Request Access Token
-      const tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: googleClientId,
-        scope: GOOGLE_SCOPES,
-        callback: '', // defined later
-      });
-
-      // Wrap token request in promise
-      const accessToken = await new Promise<string>((resolve, reject) => {
-        tokenClient.callback = (resp: any) => {
-          if (resp.error !== undefined) {
-            reject(resp);
-          }
-          resolve(resp.access_token);
-        };
-        // Explicitly use popup to avoid some iframe blocking issues
-        tokenClient.requestAccessToken({ prompt: 'consent' });
-      });
-
-      // 3. Create and Show Picker
       const pickerCallback = async (data: any) => {
         if (data.action === google.picker.Action.PICKED) {
           const docs = data.docs;
@@ -116,13 +90,13 @@ function App() {
 
           for (const doc of docs) {
             try {
-              // Fetch the file content as a Blob using the access token
               const fileId = doc.id;
               const mimeType = doc.mimeType;
               const fileName = doc.name;
 
+              // Use the cached token to fetch file content
               const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-                headers: { Authorization: `Bearer ${accessToken}` },
+                headers: { Authorization: `Bearer ${token}` },
               });
 
               if (!response.ok) throw new Error("Failed to download file");
@@ -152,31 +126,87 @@ function App() {
       view.setMimeTypes("image/png,image/jpeg,image/jpg");
 
       const picker = new google.picker.PickerBuilder()
-        .setDeveloperKey(googleApiKey) // Use the state variable
+        .setDeveloperKey(googleApiKey)
         .setAppId(googleClientId)
-        .setOAuthToken(accessToken)
+        .setOAuthToken(token)
         .addView(view)
         .addView(new google.picker.DocsUploadView())
         .setCallback(pickerCallback)
-        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED) // Enable Multi-select
+        .enableFeature(google.picker.Feature.SUPPORT_DRIVES) // Support Team Drives
         .build();
 
       picker.setVisible(true);
+    } catch (e: any) {
+      console.error(e);
+      alert("Failed to create Google Picker: " + e.message);
+      setIsDriveLoading(false);
+    }
+  }, [googleApiKey, googleClientId]);
+
+  const handleDriveImport = async () => {
+    if (!googleClientId || !googleApiKey) {
+      setShowDriveSettings(true);
+      return;
+    }
+
+    // If we already have a valid token, open picker directly
+    if (accessToken) {
+        createPicker(accessToken);
+        return;
+    }
+
+    setIsDriveLoading(true);
+
+    try {
+      const gapi = (window as any).gapi;
+      const google = (window as any).google;
+
+      if (!gapi || !google) {
+        throw new Error("Google APIs not loaded yet. Please check connection.");
+      }
+
+      // Load Picker API if not loaded
+      if (!gapi.client || !gapi.client.picker) {
+        await new Promise<void>((resolve) => gapi.load('picker', resolve));
+      }
+
+      // Initialize Token Client ONLY if not already initialized
+      if (!tokenClientRef.current) {
+          tokenClientRef.current = google.accounts.oauth2.initTokenClient({
+            client_id: googleClientId,
+            scope: GOOGLE_SCOPES,
+            callback: (resp: any) => {
+              if (resp.error !== undefined) {
+                console.error(resp);
+                setIsDriveLoading(false);
+                // Handle specific errors
+                if (resp.error === 'popup_closed_by_user') return;
+                alert("Authorization failed: " + resp.error);
+                return;
+              }
+              // Success: Store token and open picker
+              setAccessToken(resp.access_token);
+              createPicker(resp.access_token);
+            },
+          });
+      }
+
+      // Request token
+      // Note: prompt: '' (empty string) or removal of prompt property prevents forced re-consent
+      // prompt: 'consent' forces the "Allow" screen every time.
+      tokenClientRef.current.requestAccessToken({ prompt: '' });
 
     } catch (error: any) {
       console.error(error);
       setIsDriveLoading(false);
       
       const errorStr = JSON.stringify(error || {});
-      // Check for specific error hints
       if (error?.type === 'token_failed' || errorStr.includes('client_id')) {
           alert("Google Auth Failed. Check Client ID.");
           setShowDriveSettings(true);
       } else {
-          // It's hard to catch the 'developer key invalid' error from PickerBuilder as it happens inside the iframe usually,
-          // but if we catch a general error here:
-          alert("Failed to open Google Drive. If you see 'Developer Key Invalid', please check your API Key in settings.");
-          setShowDriveSettings(true);
+          alert("Failed to init Google Drive: " + (error.message || "Unknown error"));
       }
     }
   };
