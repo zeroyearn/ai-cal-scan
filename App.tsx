@@ -896,7 +896,7 @@ function App() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{img.file.name}</p>
                   {img.status === 'error' ? (
-                      <p className="text-xs text-red-500 mt-0.5 truncate font-medium" title={img.error}>
+                      <p className="text-xs text-red-500 mt-0.5 font-medium break-all whitespace-normal leading-tight" title={img.error}>
                         Error: {img.error}
                       </p>
                   ) : (
