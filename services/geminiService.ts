@@ -1,7 +1,8 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { FoodAnalysis } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Removed global instance to support dynamic API keys
+// const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const analysisSchema: Schema = {
   type: Type.OBJECT,
@@ -39,42 +40,79 @@ const analysisSchema: Schema = {
   required: ["isFood", "items", "nutrition", "mealType", "summary"],
 };
 
-export async function analyzeFoodImage(base64Image: string, mimeType: string): Promise<FoodAnalysis> {
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType,
-              data: base64Image,
-            },
-          },
-          {
-            text: `Analyze this image for a food tracking app. 
-            1. Determine if it is food. 
-            2. Identify specific ingredients/parts (like 'Steak', 'Eggs', 'Broccoli') and provide their bounding box [ymin, xmin, ymax, xmax] on a 0-1000 scale.
-            3. Estimate the nutrition facts for the whole plate.
-            4. Detect if there is already text overlay on the image.`,
-          },
-        ],
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: analysisSchema,
-        systemInstruction: "You are a specialized nutritionist AI. You are accurate with identifying food items and estimating their position in the photo.",
-      },
-    });
+// Helper function to wait
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-    if (!response.text) {
-      throw new Error("No response from Gemini");
-    }
+export async function analyzeFoodImage(base64Image: string, mimeType: string, apiKey?: string): Promise<FoodAnalysis> {
+  const maxRetries = 3;
+  let attempt = 0;
 
-    const data = JSON.parse(response.text) as FoodAnalysis;
-    return data;
-  } catch (error) {
-    console.error("Gemini Analysis Error:", error);
-    throw error;
+  // Use provided key or fallback to env
+  const effectiveKey = apiKey || process.env.API_KEY;
+  if (!effectiveKey) {
+      throw new Error("Gemini API Key is missing. Please configure it in Settings.");
   }
+  
+  // Instantiate client with the specific key for this request
+  const ai = new GoogleGenAI({ apiKey: effectiveKey });
+
+  while (attempt <= maxRetries) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType,
+                data: base64Image,
+              },
+            },
+            {
+              text: `Analyze this image for a food tracking app. 
+              1. Determine if it is food. 
+              2. Identify specific ingredients/parts (like 'Steak', 'Eggs', 'Broccoli') and provide their bounding box [ymin, xmin, ymax, xmax] on a 0-1000 scale.
+              3. Estimate the nutrition facts for the whole plate.
+              4. Detect if there is already text overlay on the image.`,
+            },
+          ],
+        },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: analysisSchema,
+          systemInstruction: "You are a specialized nutritionist AI. You are accurate with identifying food items and estimating their position in the photo.",
+        },
+      });
+
+      if (!response.text) {
+        throw new Error("No response from Gemini");
+      }
+
+      const data = JSON.parse(response.text) as FoodAnalysis;
+      return data;
+
+    } catch (error: any) {
+      attempt++;
+      
+      // Check if the error is related to overloading (503) or generic server errors (500)
+      const isOverloaded = 
+        error?.status === 503 || 
+        error?.message?.includes('503') || 
+        error?.message?.toLowerCase().includes('overloaded') ||
+        error?.message?.toLowerCase().includes('unavailable');
+
+      if (isOverloaded && attempt <= maxRetries) {
+        // Exponential backoff: 1000ms, 2000ms, 4000ms
+        const waitTime = Math.pow(2, attempt - 1) * 1000;
+        console.warn(`Model overloaded (503). Retrying in ${waitTime}ms... (Attempt ${attempt}/${maxRetries})`);
+        await delay(waitTime);
+        continue;
+      }
+
+      console.error("Gemini Analysis Error:", error);
+      throw error;
+    }
+  }
+  
+  throw new Error("Failed to analyze image after multiple retries due to server overload.");
 }

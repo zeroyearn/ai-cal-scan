@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState } from './types';
 import { analyzeFoodImage } from './services/geminiService';
 import { resizeImage, getInitialLayout, generateCardSprite, generateLabelSprite, generateTitleSprite, renderFinalImage } from './utils/canvasUtils';
@@ -61,14 +61,15 @@ function App() {
   // Responsive scale factor
   const [containerWidth, setContainerWidth] = useState<number>(1000);
 
-  // --- Google Drive Logic ---
+  // --- Google Drive & Gemini Logic ---
   const [isDriveLoading, setIsDriveLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [showDriveSettings, setShowDriveSettings] = useState(false);
   
   // Settings State
   const [googleClientId, setGoogleClientId] = useState(DEFAULT_GOOGLE_CLIENT_ID);
-  const [googleApiKey, setGoogleApiKey] = useState(DEFAULT_API_KEY);
+  const [googleApiKey, setGoogleApiKey] = useState(DEFAULT_API_KEY); // Google Picker API Key
+  const [geminiApiKey, setGeminiApiKey] = useState(process.env.API_KEY || ""); // Gemini API Key
   const [copied, setCopied] = useState(false);
 
   // Cache Access Token to avoid re-auth popups
@@ -80,13 +81,17 @@ function App() {
   useEffect(() => {
     const storedId = localStorage.getItem('aical_google_client_id');
     const storedKey = localStorage.getItem('aical_google_api_key');
+    const storedGeminiKey = localStorage.getItem('aical_gemini_api_key');
+
     if (storedId) setGoogleClientId(storedId);
     if (storedKey) setGoogleApiKey(storedKey);
+    if (storedGeminiKey) setGeminiApiKey(storedGeminiKey);
   }, []);
 
   const saveSettings = () => {
     localStorage.setItem('aical_google_client_id', googleClientId);
     localStorage.setItem('aical_google_api_key', googleApiKey);
+    localStorage.setItem('aical_gemini_api_key', geminiApiKey);
     // Clear token if settings change to force re-auth with new ID
     setAccessToken(null);
     tokenClientRef.current = null;
@@ -491,7 +496,8 @@ function App() {
         // This prevents layout shifts due to rotation.
         const correctedPreviewUrl = `data:${mimeType};base64,${base64Data}`;
 
-        const analysis = await analyzeFoodImage(base64Data, mimeType);
+        // Pass Gemini Key
+        const analysis = await analyzeFoodImage(base64Data, mimeType, geminiApiKey);
 
         if (!analysis.isFood) {
           setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'not-food', error: 'Not recognized as food' } : p));
@@ -814,7 +820,7 @@ function App() {
                 <button 
                     onClick={() => setShowDriveSettings(true)}
                     className="bg-white border border-gray-300 text-gray-500 hover:text-gray-700 hover:bg-gray-50 p-2.5 rounded-xl shadow-sm transition-colors"
-                    title="Google Drive Settings"
+                    title="Settings"
                 >
                     <Settings size={20} />
                 </button>
@@ -1216,7 +1222,7 @@ function App() {
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                 <Settings size={24} className="text-gray-500" />
-                Google Drive Settings
+                Settings
               </h2>
               <button 
                 onClick={() => setShowDriveSettings(false)}
@@ -1227,74 +1233,96 @@ function App() {
             </div>
 
             <div className="space-y-6">
-                <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-800 flex items-start gap-3">
-                    <Info className="shrink-0 mt-0.5" size={16} />
-                    <p>
-                        Configure your Google Cloud credentials to access Drive.
-                    </p>
-                </div>
-
-                {/* 1. Client ID */}
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                        OAuth 2.0 Client ID
-                    </label>
-                    <input 
-                        type="text" 
-                        value={googleClientId}
-                        onChange={(e) => setGoogleClientId(e.target.value)}
-                        placeholder="123...apps.googleusercontent.com"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                        Must be "Web application" type.
-                    </p>
-                </div>
-
-                {/* 2. Authorized Origin - Helper */}
-                <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                        Required Config: Authorized Origin
-                    </label>
-                    <div className="flex gap-2">
-                         <div className="flex-1 bg-white border border-gray-200 px-3 py-2 rounded text-sm font-mono truncate text-gray-600">
-                            {window.location.origin}
-                         </div>
-                         <button 
-                            onClick={copyOrigin}
-                            className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 rounded flex items-center justify-center transition-colors min-w-[40px]"
-                            title="Copy to clipboard"
-                         >
-                            {copied ? <Check size={16} className="text-green-500"/> : <Copy size={16}/>}
-                         </button>
+                
+                {/* 0. Gemini API Configuration */}
+                <div className="space-y-3">
+                    <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2">
+                        <Sparkles size={16} className="text-purple-600"/>
+                        Gemini AI Configuration
+                    </h3>
+                    
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Gemini API Key
+                        </label>
+                        <input 
+                            type="password"
+                            value={geminiApiKey}
+                            onChange={(e) => setGeminiApiKey(e.target.value)}
+                            placeholder="AIza..."
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                            Required for image analysis. <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-purple-600 hover:underline">Get a key here</a>.
+                        </p>
                     </div>
-                    <p className="text-xs text-gray-500 mt-2">
-                        Add this URL to <strong>Authorized JavaScript origins</strong> in Google Cloud Console.
-                        <br/>
-                        <span className="text-red-500">Fixes "redirect_uri_mismatch" error.</span>
-                    </p>
                 </div>
 
-                {/* 3. API Key */}
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-                        Google API Key
-                        <Key size={14} className="text-gray-400" />
-                    </label>
-                    <input 
-                        type="text" 
-                        value={googleApiKey}
-                        onChange={(e) => setGoogleApiKey(e.target.value)}
-                        placeholder="AIza..."
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
-                    />
-                     <div className="mt-2 text-xs text-gray-500 space-y-1">
-                        <p>Required for the File Picker dialog.</p>
-                        <p className="flex items-center gap-1">
+
+                {/* Google Drive Config */}
+                <div className="space-y-3 pt-2">
+                     <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2">
+                        <Cloud size={16} className="text-blue-600"/>
+                        Google Drive Integration
+                    </h3>
+                    
+                    <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-800 flex items-start gap-2">
+                        <Info className="shrink-0 mt-0.5" size={14} />
+                        <p>
+                            Configure Google Cloud credentials to enable importing/saving to Drive.
+                        </p>
+                    </div>
+
+                    {/* 1. Client ID */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            OAuth 2.0 Client ID
+                        </label>
+                        <input 
+                            type="text" 
+                            value={googleClientId}
+                            onChange={(e) => setGoogleClientId(e.target.value)}
+                            placeholder="123...apps.googleusercontent.com"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
+                        />
+                    </div>
+
+                    {/* 2. Authorized Origin - Helper */}
+                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                            Authorized Origin (For GCP Console)
+                        </label>
+                        <div className="flex gap-2">
+                             <div className="flex-1 bg-white border border-gray-200 px-3 py-2 rounded text-sm font-mono truncate text-gray-600">
+                                {window.location.origin}
+                             </div>
+                             <button 
+                                onClick={copyOrigin}
+                                className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 rounded flex items-center justify-center transition-colors min-w-[40px]"
+                                title="Copy to clipboard"
+                             >
+                                {copied ? <Check size={16} className="text-green-500"/> : <Copy size={16}/>}
+                             </button>
+                        </div>
+                    </div>
+
+                    {/* 3. API Key */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                            Google Picker API Key
+                            <Key size={14} className="text-gray-400" />
+                        </label>
+                        <input 
+                            type="password"
+                            value={googleApiKey}
+                            onChange={(e) => setGoogleApiKey(e.target.value)}
+                            placeholder="AIza..."
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
+                        />
+                         <div className="mt-2 text-xs text-gray-500 flex items-center gap-1">
                             <Info size={12}/> 
                             Must enable <strong>Google Picker API</strong> in Library.
-                        </p>
-                         <p className="text-red-500">Fixes "The API developer key is invalid" error.</p>
+                        </div>
                     </div>
                 </div>
 
