@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState } from './types';
 import { analyzeFoodImage } from './services/geminiService';
 import { resizeImage, getInitialLayout, generateCardSprite, generateLabelSprite, generateTitleSprite, renderFinalImage } from './utils/canvasUtils';
@@ -8,7 +8,8 @@ import { resizeImage, getInitialLayout, generateCardSprite, generateLabelSprite,
 // --- Google Drive Configuration ---
 // Default hardcoded ID (can be overridden by user in settings)
 const DEFAULT_GOOGLE_CLIENT_ID = "959444237240-lca07hnf1qclkj3o93o1k3kuo65bkqr7.apps.googleusercontent.com"; 
-const GOOGLE_API_KEY = process.env.API_KEY || ""; 
+// Note: This default API key is often for Gemini. Picker requires "Google Picker API" enabled.
+const DEFAULT_API_KEY = process.env.API_KEY || ""; 
 const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 
 // Helper to read file as base64 for final high-res rendering
@@ -43,20 +44,33 @@ function App() {
   // --- Google Drive Logic ---
   const [isDriveLoading, setIsDriveLoading] = useState(false);
   const [showDriveSettings, setShowDriveSettings] = useState(false);
+  
+  // Settings State
   const [googleClientId, setGoogleClientId] = useState(DEFAULT_GOOGLE_CLIENT_ID);
+  const [googleApiKey, setGoogleApiKey] = useState(DEFAULT_API_KEY);
+  const [copied, setCopied] = useState(false);
   
   useEffect(() => {
-    const stored = localStorage.getItem('aical_google_client_id');
-    if (stored) setGoogleClientId(stored);
+    const storedId = localStorage.getItem('aical_google_client_id');
+    const storedKey = localStorage.getItem('aical_google_api_key');
+    if (storedId) setGoogleClientId(storedId);
+    if (storedKey) setGoogleApiKey(storedKey);
   }, []);
 
-  const saveClientId = (id: string) => {
-    setGoogleClientId(id);
-    localStorage.setItem('aical_google_client_id', id);
+  const saveSettings = () => {
+    localStorage.setItem('aical_google_client_id', googleClientId);
+    localStorage.setItem('aical_google_api_key', googleApiKey);
+    setShowDriveSettings(false);
+  };
+
+  const copyOrigin = () => {
+    navigator.clipboard.writeText(window.location.origin);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleDriveImport = async () => {
-    if (!googleClientId) {
+    if (!googleClientId || !googleApiKey) {
       setShowDriveSettings(true);
       return;
     }
@@ -90,7 +104,7 @@ function App() {
           }
           resolve(resp.access_token);
         };
-        // Explicitly use popup to avoid some iframe blocking issues, though it is default
+        // Explicitly use popup to avoid some iframe blocking issues
         tokenClient.requestAccessToken({ prompt: 'consent' });
       });
 
@@ -138,7 +152,7 @@ function App() {
       view.setMimeTypes("image/png,image/jpeg,image/jpg");
 
       const picker = new google.picker.PickerBuilder()
-        .setDeveloperKey(GOOGLE_API_KEY)
+        .setDeveloperKey(googleApiKey) // Use the state variable
         .setAppId(googleClientId)
         .setOAuthToken(accessToken)
         .addView(view)
@@ -151,14 +165,19 @@ function App() {
 
     } catch (error: any) {
       console.error(error);
-      // If error is related to client ID, suggest opening settings
-      if (error?.type === 'token_failed' || error?.message?.includes('client_id')) {
-          alert("Google Auth Failed. Please check your Client ID configuration.");
+      setIsDriveLoading(false);
+      
+      const errorStr = JSON.stringify(error || {});
+      // Check for specific error hints
+      if (error?.type === 'token_failed' || errorStr.includes('client_id')) {
+          alert("Google Auth Failed. Check Client ID.");
           setShowDriveSettings(true);
       } else {
-          alert("Failed to open Google Drive: " + (error.message || "Unknown error. Check console."));
+          // It's hard to catch the 'developer key invalid' error from PickerBuilder as it happens inside the iframe usually,
+          // but if we catch a general error here:
+          alert("Failed to open Google Drive. If you see 'Developer Key Invalid', please check your API Key in settings.");
+          setShowDriveSettings(true);
       }
-      setIsDriveLoading(false);
     }
   };
 
@@ -839,7 +858,7 @@ function App() {
       {/* Settings Modal */}
       {showDriveSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                 <Settings size={24} className="text-gray-500" />
@@ -853,54 +872,83 @@ function App() {
               </button>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-6">
                 <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-800 flex items-start gap-3">
                     <Info className="shrink-0 mt-0.5" size={16} />
                     <p>
-                        To use Google Drive, you must create an <strong>OAuth 2.0 Client ID</strong> in Google Cloud Console.
+                        Configure your Google Cloud credentials to access Drive.
                     </p>
                 </div>
 
+                {/* 1. Client ID */}
                 <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Client ID
+                        OAuth 2.0 Client ID
                     </label>
                     <input 
                         type="text" 
                         value={googleClientId}
-                        onChange={(e) => saveClientId(e.target.value)}
+                        onChange={(e) => setGoogleClientId(e.target.value)}
                         placeholder="123...apps.googleusercontent.com"
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
                     />
                     <p className="text-xs text-gray-500 mt-1">
-                        Ensure the application type is set to <strong>Web application</strong>.
+                        Must be "Web application" type.
                     </p>
                 </div>
 
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Authorized JavaScript Origin (Required)
+                {/* 2. Authorized Origin - Helper */}
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                        Required Config: Authorized Origin
                     </label>
-                    <div className="flex items-center gap-2">
-                        <code className="flex-1 bg-gray-100 px-3 py-2 rounded-lg text-sm font-mono break-all border border-gray-200">
+                    <div className="flex gap-2">
+                         <div className="flex-1 bg-white border border-gray-200 px-3 py-2 rounded text-sm font-mono truncate text-gray-600">
                             {window.location.origin}
-                        </code>
+                         </div>
+                         <button 
+                            onClick={copyOrigin}
+                            className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 rounded flex items-center justify-center transition-colors min-w-[40px]"
+                            title="Copy to clipboard"
+                         >
+                            {copied ? <Check size={16} className="text-green-500"/> : <Copy size={16}/>}
+                         </button>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                        Copy this URL and add it to "Authorized JavaScript origins" in your GCP Console.
+                    <p className="text-xs text-gray-500 mt-2">
+                        Add this URL to <strong>Authorized JavaScript origins</strong> in Google Cloud Console.
+                        <br/>
+                        <span className="text-red-500">Fixes "redirect_uri_mismatch" error.</span>
                     </p>
                 </div>
-                
-                {window.location.hostname === 'localhost' && (
-                     <div className="text-xs text-orange-600 bg-orange-50 p-2 rounded border border-orange-100">
-                        Note: Localhost ports sometimes change. Ensure the port matches exactly.
-                     </div>
-                )}
+
+                {/* 3. API Key */}
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                        Google API Key
+                        <Key size={14} className="text-gray-400" />
+                    </label>
+                    <input 
+                        type="text" 
+                        value={googleApiKey}
+                        onChange={(e) => setGoogleApiKey(e.target.value)}
+                        placeholder="AIza..."
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
+                    />
+                     <div className="mt-2 text-xs text-gray-500 space-y-1">
+                        <p>Required for the File Picker dialog.</p>
+                        <p className="flex items-center gap-1">
+                            <Info size={12}/> 
+                            Must enable <strong>Google Picker API</strong> in Library.
+                        </p>
+                         <p className="text-red-500">Fixes "The API developer key is invalid" error.</p>
+                    </div>
+                </div>
+
             </div>
 
             <div className="mt-8 flex justify-end">
                 <button
-                    onClick={() => setShowDriveSettings(false)}
+                    onClick={saveSettings}
                     className="bg-black text-white px-5 py-2 rounded-lg hover:bg-gray-800 transition-colors font-medium"
                 >
                     Save & Close
