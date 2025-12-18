@@ -45,6 +45,13 @@ export interface ImageLayout {
   labels: LabelState[];
 }
 
+export interface LayoutConfig {
+  defaultLabelStyle: LabelStyle;
+  defaultTitleScale: number;
+  defaultCardScale: number;
+  defaultLabelScale: number;
+}
+
 export type ProcessStatus = 'idle' | 'analyzing' | 'rendering' | 'complete' | 'error' | 'not-food';
 
 export interface ProcessedImage {

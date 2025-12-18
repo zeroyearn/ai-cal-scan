@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion } from './types';
 import { analyzeFoodImage } from './services/geminiService';
 import { resizeImage, getInitialLayout, drawScene, renderFinalImage } from './utils/canvasUtils';
@@ -42,6 +42,12 @@ function App() {
   const [geminiApiKey, setGeminiApiKey] = useState(process.env.API_KEY || "");
   const [geminiApiUrl, setGeminiApiUrl] = useState("");
 
+  // Appearance Defaults
+  const [defaultLabelStyle, setDefaultLabelStyle] = useState<LabelStyle>('default');
+  const [defaultTitleScale, setDefaultTitleScale] = useState(7.6);
+  const [defaultCardScale, setDefaultCardScale] = useState(4.2);
+  const [defaultLabelScale, setDefaultLabelScale] = useState(1.0);
+
   const [editorContainerRef, setEditorContainerRef] = useState<HTMLDivElement | null>(null);
   const [dragTarget, setDragTarget] = useState<{ type: 'card' | 'title' | 'label', id?: number | string } | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number, y: number } | null>(null);
@@ -68,12 +74,23 @@ function App() {
     const storedDeleteOption = localStorage.getItem('aical_delete_after_save');
     const storedGeminiKey = localStorage.getItem('aical_gemini_api_key');
     const storedGeminiUrl = localStorage.getItem('aical_gemini_api_url');
+    
+    // Load Defaults
+    const storedLabelStyle = localStorage.getItem('aical_default_label_style');
+    const storedTitleScale = localStorage.getItem('aical_default_title_scale');
+    const storedCardScale = localStorage.getItem('aical_default_card_scale');
+    const storedLabelScale = localStorage.getItem('aical_default_label_scale');
 
     if (storedId) setGoogleClientId(storedId);
     if (storedKey) setGoogleApiKey(storedKey);
     if (storedDeleteOption) setDeleteAfterSave(storedDeleteOption === 'true');
     if (storedGeminiKey) setGeminiApiKey(storedGeminiKey);
     if (storedGeminiUrl) setGeminiApiUrl(storedGeminiUrl);
+
+    if (storedLabelStyle) setDefaultLabelStyle(storedLabelStyle as LabelStyle);
+    if (storedTitleScale) setDefaultTitleScale(parseFloat(storedTitleScale));
+    if (storedCardScale) setDefaultCardScale(parseFloat(storedCardScale));
+    if (storedLabelScale) setDefaultLabelScale(parseFloat(storedLabelScale));
   }, []);
 
   const saveSettings = () => {
@@ -82,6 +99,12 @@ function App() {
     localStorage.setItem('aical_delete_after_save', String(deleteAfterSave));
     localStorage.setItem('aical_gemini_api_key', geminiApiKey);
     localStorage.setItem('aical_gemini_api_url', geminiApiUrl);
+
+    localStorage.setItem('aical_default_label_style', defaultLabelStyle);
+    localStorage.setItem('aical_default_title_scale', String(defaultTitleScale));
+    localStorage.setItem('aical_default_card_scale', String(defaultCardScale));
+    localStorage.setItem('aical_default_label_scale', String(defaultLabelScale));
+
     setAccessToken(null);
     tokenClientRef.current = null;
     setShowDriveSettings(false);
@@ -403,7 +426,15 @@ function App() {
             const img = new Image();
             img.src = correctedPreviewUrl;
             await new Promise(r => img.onload = r);
-            const layout = getInitialLayout(img.width, img.height, analysis);
+            
+            // Pass default configurations here
+            const layout = getInitialLayout(img.width, img.height, analysis, {
+                defaultLabelStyle,
+                defaultTitleScale,
+                defaultCardScale,
+                defaultLabelScale
+            });
+            
             setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, previewUrl: correctedPreviewUrl, status: 'complete', analysis, layout } : p));
         } catch (error: any) {
             setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'error', error: error.message || 'Processing failed' } : p));
@@ -841,6 +872,41 @@ function App() {
                       <div><label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">Gemini API Base URL</label><div className="relative"><Globe className="absolute left-3 top-2.5 text-gray-400" size={16} /><input type="text" value={geminiApiUrl} onChange={(e) => setGeminiApiUrl(e.target.value)} placeholder="https://..." className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono" /></div></div>
                     </div>
                 </div>
+                
+                <div className="space-y-3 pt-2">
+                     <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Palette size={16} className="text-teal-600"/>Appearance Defaults</h3>
+                     <div className="space-y-4 bg-gray-50 p-4 rounded-lg border border-gray-100">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Default Label Style</label>
+                            <div className="flex gap-2">
+                                <button onClick={() => setDefaultLabelStyle('default')} className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${defaultLabelStyle === 'default' ? 'bg-white border-2 border-teal-500 text-teal-700 shadow-sm' : 'bg-gray-100 border border-transparent text-gray-500 hover:bg-gray-200'}`}>
+                                    <LinkIcon size={14}/> Default
+                                </button>
+                                <button onClick={() => setDefaultLabelStyle('pill')} className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${defaultLabelStyle === 'pill' ? 'bg-white border-2 border-teal-500 text-teal-700 shadow-sm' : 'bg-gray-100 border border-transparent text-gray-500 hover:bg-gray-200'}`}>
+                                    <Tag size={14}/> Pill
+                                </button>
+                                <button onClick={() => setDefaultLabelStyle('text')} className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${defaultLabelStyle === 'text' ? 'bg-white border-2 border-teal-500 text-teal-700 shadow-sm' : 'bg-gray-100 border border-transparent text-gray-500 hover:bg-gray-200'}`}>
+                                    <TypeIcon size={14}/> Text
+                                </button>
+                            </div>
+                        </div>
+                        <div className="space-y-3">
+                            <div className="flex flex-col gap-1">
+                                <div className="flex justify-between text-xs font-medium text-gray-600"><span>Default Title Size</span><span>{defaultTitleScale}</span></div>
+                                <input type="range" min="0" max="20" step="0.1" value={defaultTitleScale} onChange={(e) => setDefaultTitleScale(parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-600" />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                                <div className="flex justify-between text-xs font-medium text-gray-600"><span>Default Card Size</span><span>{defaultCardScale}</span></div>
+                                <input type="range" min="0" max="20" step="0.1" value={defaultCardScale} onChange={(e) => setDefaultCardScale(parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-600" />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                                <div className="flex justify-between text-xs font-medium text-gray-600"><span>Default Label Size</span><span>{defaultLabelScale}</span></div>
+                                <input type="range" min="0" max="20" step="0.1" value={defaultLabelScale} onChange={(e) => setDefaultLabelScale(parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-600" />
+                            </div>
+                        </div>
+                     </div>
+                </div>
+
                 <div className="space-y-3 pt-2">
                      <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Cloud size={16} className="text-blue-600"/>Google Drive Integration</h3>
                      <div className="flex items-center justify-between p-3 bg-orange-50 border border-orange-100 rounded-lg">

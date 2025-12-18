@@ -1,4 +1,4 @@
-import { FoodAnalysis, ImageLayout, HitRegion, ElementState, LabelState } from "../types";
+import { FoodAnalysis, ImageLayout, HitRegion, ElementState, LabelState, LayoutConfig } from "../types";
 
 // --- Constants for Scale Calibration ---
 // These factors calibrate the "User Scale" to the "Canvas Scale".
@@ -442,21 +442,25 @@ function drawNewMacroCard(ctx: CanvasRenderingContext2D, label: string, value: s
 export const getInitialLayout = (
   imgWidth: number, 
   imgHeight: number, 
-  analysis: FoodAnalysis
+  analysis: FoodAnalysis,
+  config?: LayoutConfig // New optional config parameter
 ): ImageLayout => {
+  // Use defaults from config or fallback to original hardcoded values
+  const defaultTitleScale = config?.defaultTitleScale ?? 7.6;
+  const defaultCardScale = config?.defaultCardScale ?? 4.2;
+  const defaultLabelScale = config?.defaultLabelScale ?? 1.0;
+  const defaultLabelStyle = config?.defaultLabelStyle ?? 'default';
+
   // Meal Type: Top Center
-  // Default Scale 760% -> 7.6
   const mealType: ElementState = {
     x: 0.5,
     y: 0.08,
-    scale: 7.6, 
+    scale: defaultTitleScale, 
     text: analysis.mealType,
     visible: true
   };
 
   // Card: Bottom Left
-  // Default Scale 420% -> 4.2
-  const defaultCardScale = 4.2;
   const cardScaleRef = imgWidth / 1200;
   
   // Calculate height with default scale AND Modifier
@@ -497,9 +501,9 @@ export const getInitialLayout = (
       y: Math.max(0.05, cy - 0.15),
       anchorX: cx,
       anchorY: cy,
-      scale: 1.0,
+      scale: defaultLabelScale,
       visible: true,
-      style: 'default' // Default style: Line + Pill
+      style: defaultLabelStyle
     };
   });
 
