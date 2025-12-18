@@ -272,8 +272,12 @@ function App() {
           setIsDriveLoading(false);
         };
 
-        const view = new google.picker.View(google.picker.ViewId.DOCS_IMAGES);
-        view.setMimeTypes("image/png,image/jpeg,image/jpg");
+        // CHANGE: Use DocsView instead of ViewId.DOCS_IMAGES to support folder navigation
+        // DocsView defaults to ViewId.DOCS which supports folders
+        const view = new google.picker.DocsView()
+            .setIncludeFolders(true)
+            .setMimeTypes("image/png,image/jpeg,image/jpg")
+            .setSelectFolderEnabled(false); // We want to click into folders, but select files
         
         // Extract Project Number from Client ID (before the first dash) for setAppId
         // This is crucial for correct picker permissions
