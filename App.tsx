@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion } from './types';
 import { analyzeFoodImage } from './services/geminiService';
 import { resizeImage, getInitialLayout, drawScene, renderFinalImage } from './utils/canvasUtils';
@@ -8,8 +8,9 @@ import { resizeImage, getInitialLayout, drawScene, renderFinalImage } from './ut
 // --- Google Drive Configuration ---
 const DEFAULT_GOOGLE_CLIENT_ID = "959444237240-lca07hnf1qclkj3o93o1k3kuo65bkqr7.apps.googleusercontent.com"; 
 const DEFAULT_API_KEY = process.env.API_KEY || ""; 
-// Required scopes for Picker and basic Drive operations.
-const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive';
+// Use ONLY the full drive scope. Mixing scopes can cause Google to present granular checkboxes, 
+// allowing users to accidentally uncheck "delete/edit" permissions while keeping "view".
+const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive';
 
 const dataURLtoBlob = (dataurl: string) => {
     const arr = dataurl.split(',');
@@ -105,9 +106,16 @@ function App() {
     localStorage.setItem('aical_default_card_scale', String(defaultCardScale));
     localStorage.setItem('aical_default_label_scale', String(defaultLabelScale));
 
-    setAccessToken(null);
-    tokenClientRef.current = null;
+    // Do NOT clear access token automatically on save, unless client ID changed, 
+    // to avoid forcing re-login unnecessarily. 
+    // Use the explicit Reset button for that.
     setShowDriveSettings(false);
+  };
+  
+  const handleResetAuth = () => {
+      setAccessToken(null);
+      tokenClientRef.current = null;
+      alert("Authorization reset. You will be prompted to log in again next time you use Google Drive features.");
   };
 
   const copyOrigin = () => {
@@ -139,6 +147,8 @@ function App() {
       });
       
       if (!response.ok) {
+        console.error("Delete failed with status:", response.status, response.statusText);
+        // If 403, it's a permission issue.
         return false;
       } else {
         return true;
@@ -171,6 +181,16 @@ function App() {
                         setIsUploading(false);
                         return;
                     }
+                    // Check if user granted the scopes
+                    const hasGrantedAllScopes = google.accounts.oauth2.hasGrantedAllScopes(
+                        resp,
+                        GOOGLE_SCOPES
+                    );
+                    
+                    if (!hasGrantedAllScopes) {
+                         alert("Warning: Not all permissions were granted. 'Delete original' feature may fail. Please reset auth and grant full access.");
+                    }
+
                     setAccessToken(resp.access_token);
                     if (onAuthSuccessRef.current) {
                         onAuthSuccessRef.current(resp.access_token);
@@ -919,6 +939,10 @@ function App() {
                         <div className="flex gap-2"><div className="flex-1 bg-white border border-gray-200 px-3 py-2 rounded text-sm font-mono truncate text-gray-600">{window.location.origin}</div><button onClick={copyOrigin} className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 rounded flex items-center justify-center transition-colors">{copied ? <Check size={16} className="text-green-500"/> : <Copy size={16}/>}</button></div>
                     </div>
                     <div><label className="block text-sm font-medium text-gray-700 mb-1">Google Picker API Key</label><input type="password" value={googleApiKey} onChange={(e) => setGoogleApiKey(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono" /></div>
+                    
+                    <div className="flex justify-end pt-2">
+                        <button onClick={handleResetAuth} className="text-red-500 text-xs font-medium hover:text-red-700 flex items-center gap-1 hover:bg-red-50 px-2 py-1 rounded transition-colors" title="Force re-login next time"><RotateCcw size={12}/> Reset Access</button>
+                    </div>
                 </div>
             </div>
             <div className="mt-8 flex justify-end"><button onClick={saveSettings} className="bg-black text-white px-5 py-2 rounded-lg hover:bg-gray-800 transition-colors font-medium">Save & Close</button></div>
