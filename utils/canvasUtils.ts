@@ -1,115 +1,79 @@
-import { FoodAnalysis, ImageLayout, HitRegion, ElementState, LabelState, LayoutConfig } from "../types";
+import { FoodAnalysis, ImageLayout, LayoutConfig, ElementState, LabelState, HitRegion } from "../types";
 
-// --- Constants for Scale Calibration ---
-// These factors calibrate the "User Scale" to the "Canvas Scale".
-// Unified across preview and export.
-const TITLE_SCALE_MODIFIER = 0.15;
-const CARD_SCALE_MODIFIER = 0.25;
+const CARD_SCALE_MODIFIER = 1.0;
 
-// --- Main Drawing Logic (Shared by Preview and Export) ---
-
-/**
- * Draws the entire scene (background image + overlays) onto the provided context.
- * Returns a list of HitRegions for the UI to generate interactive overlays.
- */
-export const drawScene = (
+export function drawScene(
   ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement | null, // Pass null if you only want to draw overlays (transparent bg)
+  img: HTMLImageElement | null,
   analysis: FoodAnalysis,
   layout: ImageLayout
-): HitRegion[] => {
-  const width = ctx.canvas.width;
-  const height = ctx.canvas.height;
-  const hitRegions: HitRegion[] = [];
+): HitRegion[] {
+  const regions: HitRegion[] = [];
 
-  // 1. Draw Background
+  // Clear and draw background only if image is provided
   if (img) {
-    ctx.drawImage(img, 0, 0, width, height);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
   }
 
-  // Base scale relative to a 1200px wide reference image
-  // This ensures elements look the same relative size regardless of resolution
-  const refScale = width / 1200;
+  const { width, height } = ctx.canvas;
 
-  // 2. Draw Meal Type
-  if (layout.mealType.visible) {
-    const x = layout.mealType.x * width;
-    // Apply Modifier
-    const s = layout.mealType.scale * refScale * TITLE_SCALE_MODIFIER;
-    // Text offset adjustment (centering) is handled in draw function, 
-    // but the layout.y is the top-center anchor.
-    const y = layout.mealType.y * height;
-    
-    const bounds = drawMealTypeInternal(ctx, layout.mealType.text || analysis.mealType, x, y, s);
-    hitRegions.push({
-      id: 'title',
-      type: 'title',
-      ...bounds
+  // Draw Meal Type
+  if (layout.mealType && layout.mealType.visible && layout.mealType.text) {
+    const bbox = drawMealTypeInternal(
+      ctx,
+      layout.mealType.text,
+      layout.mealType.x * width,
+      layout.mealType.y * height,
+      layout.mealType.scale
+    );
+    regions.push({
+        id: 'title',
+        type: 'title',
+        ...bbox
     });
   }
 
-  // 3. Draw Labels & Lines
-  layout.labels.forEach(label => {
-    if (!label.visible) return;
-    
-    const pillX = label.x * width;
-    const pillY = label.y * height;
-    const anchorX = label.anchorX * width;
-    const anchorY = label.anchorY * height;
-    const s = label.scale * refScale; // No modifier for labels
-    const text = label.text || "";
-
-    // Draw Line & Dot (Only for 'default' style)
-    if (label.style === 'default') {
-      ctx.beginPath();
-      ctx.moveTo(anchorX, anchorY);
-      ctx.lineTo(pillX, pillY); 
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-      ctx.lineWidth = 3 * s;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(anchorX, anchorY, 6 * s, 0, Math.PI * 2);
-      ctx.fillStyle = "white";
-      ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,0.3)";
-      ctx.lineWidth = 2 * s;
-      ctx.stroke();
-    }
-
-    let bounds;
-    // Draw Label Content
-    if (label.style === 'text') {
-       bounds = drawLabelTextOnlyInternal(ctx, text, pillX, pillY, s);
-    } else {
-       // 'default' and 'pill' use the pill look
-       bounds = drawLabelPillInternal(ctx, text, pillX, pillY, s);
-    }
-
-    hitRegions.push({
-      id: label.id,
-      type: 'label',
-      ...bounds
-    });
-  });
-
-  // 4. Draw Nutrition Card
-  if (layout.card.visible) {
-    const s = layout.card.scale * refScale * CARD_SCALE_MODIFIER;
-    const x = layout.card.x * width;
-    const y = layout.card.y * height;
-    
-    const bounds = drawNutritionCardInternal(ctx, analysis, x, y, s);
-    hitRegions.push({
-      id: 'card',
-      type: 'card',
-      ...bounds
+  // Draw Labels
+  if (layout.labels) {
+    layout.labels.forEach((label) => {
+      if (!label.visible || !label.text) return;
+      const lx = label.x * width;
+      const ly = label.y * height;
+      
+      let bbox;
+      if (label.style === 'text') {
+        bbox = drawLabelTextOnlyInternal(ctx, label.text, lx, ly, label.scale);
+      } else {
+        // 'default' or 'pill'
+        bbox = drawLabelPillInternal(ctx, label.text, lx, ly, label.scale);
+      }
+      regions.push({
+          id: label.id,
+          type: 'label',
+          ...bbox
+      });
     });
   }
 
-  return hitRegions;
-};
+  // Draw Nutrition Card
+  if (layout.card && layout.card.visible) {
+    const bbox = drawNutritionCardInternal(
+      ctx,
+      analysis,
+      layout.card.x * width,
+      layout.card.y * height,
+      layout.card.scale
+    );
+    regions.push({
+        id: 'card',
+        type: 'card',
+        ...bbox
+    });
+  }
 
+  return regions;
+}
 
 /**
  * Generates the final high-res image for export.
@@ -130,13 +94,101 @@ export const renderFinalImage = async (
       const ctx = canvas.getContext("2d");
       if (!ctx) { reject("No Context"); return; }
 
+      // Enable high-quality smoothing for the final render
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+
       // Use the unified drawing function
       drawScene(ctx, img, analysis, layout);
 
-      resolve(canvas.toDataURL("image/jpeg", 0.9));
+      // CHANGE: Increased quality to 1.0 (Max)
+      resolve(canvas.toDataURL("image/jpeg", 1.0));
     };
     img.onerror = reject;
   });
+};
+
+/**
+ * Generates a 2x2 Collage from 4 images
+ */
+export const generateCollage = async (
+  imageUrls: string[],
+  config: { width: number; height: number; padding: number; color: string }
+): Promise<string> => {
+    if (imageUrls.length !== 4) throw new Error("Collage requires exactly 4 images");
+
+    // Load all images
+    const images = await Promise.all(imageUrls.map(url => new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = url;
+    })));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = config.width;
+    canvas.height = config.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not get canvas context");
+
+    // Background
+    ctx.fillStyle = config.color;
+    ctx.fillRect(0, 0, config.width, config.height);
+
+    // Calculate Grid
+    // 2x2 Grid
+    // Cell size calculation:
+    // Total width = 2 * cellW + 3 * padding (outer + inner + outer)
+    // Actually typically: Outer padding around the whole group, and inner padding between items.
+    // Let's assume 'padding' is applied between items AND around the edges uniformly.
+    
+    // Width available for images = TotalWidth - (3 * padding)
+    // Cell Width = Available / 2
+    
+    const p = config.padding;
+    const cellW = (config.width - (3 * p)) / 2;
+    const cellH = (config.height - (3 * p)) / 2;
+    
+    // Positions:
+    // 0: Top-Left  (p, p)
+    // 1: Top-Right (p + cellW + p, p)
+    // 2: Btm-Left  (p, p + cellH + p)
+    // 3: Btm-Right (p + cellW + p, p + cellH + p)
+    
+    const positions = [
+        { x: p, y: p },
+        { x: p * 2 + cellW, y: p },
+        { x: p, y: p * 2 + cellH },
+        { x: p * 2 + cellW, y: p * 2 + cellH }
+    ];
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    images.forEach((img, i) => {
+        const pos = positions[i];
+        
+        // Draw Image using 'object-fit: cover' logic
+        // We want to fill [pos.x, pos.y, cellW, cellH] with img
+        
+        const scale = Math.max(cellW / img.width, cellH / img.height);
+        const renderW = img.width * scale;
+        const renderH = img.height * scale;
+        
+        const offsetX = (cellW - renderW) / 2;
+        const offsetY = (cellH - renderH) / 2;
+        
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(pos.x, pos.y, cellW, cellH);
+        ctx.clip(); // Clip to cell box
+        
+        ctx.drawImage(img, pos.x + offsetX, pos.y + offsetY, renderW, renderH);
+        ctx.restore();
+    });
+
+    return canvas.toDataURL("image/jpeg", 0.95);
 };
 
 
@@ -534,85 +586,65 @@ function drawNutritionCardInternal(ctx: CanvasRenderingContext2D, analysis: Food
 }
 
 function drawCardBranding(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
-  const logoSize = 60 * scale; 
-  ctx.fillStyle = "#111827"; 
-  ctx.beginPath();
-  ctx.roundRect(x, y, logoSize, logoSize, 14 * scale);
-  ctx.fill();
-
-  ctx.strokeStyle = "#4b5563"; 
-  ctx.lineWidth = 3 * scale;
-  ctx.lineCap = "round";
-  const bLen = 10 * scale;
-  const bPad = 8 * scale;
+  const iconSize = 32 * scale;
   
-  ctx.beginPath(); ctx.moveTo(x + bPad, y + bPad + bLen); ctx.quadraticCurveTo(x + bPad, y + bPad, x + bPad + bLen, y + bPad); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x + logoSize - bPad - bLen, y + bPad); ctx.quadraticCurveTo(x + logoSize - bPad, y + logoSize - bPad, x + logoSize - bPad + bLen, y + bPad); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x + logoSize - bPad, y + logoSize - bPad - bLen); ctx.quadraticCurveTo(x + logoSize - bPad, y + logoSize - bPad, x + logoSize - bPad - bLen, y + logoSize - bPad); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x + bPad + bLen, y + logoSize - bPad); ctx.quadraticCurveTo(x + bPad, y + logoSize - bPad, x + bPad, y + logoSize - bPad - bLen); ctx.stroke();
-
-  const cx = x + logoSize / 2;
-  const cy = y + logoSize / 2 + 3 * scale; 
-  const aR = 15 * scale;
-
-  ctx.fillStyle = "white";
+  // Icon Background
+  ctx.fillStyle = "black";
   ctx.beginPath();
-  ctx.moveTo(cx, cy - aR * 0.8);
-  ctx.bezierCurveTo(cx + aR * 0.9, cy - aR * 1.3, cx + aR * 1.8, cy - aR * 0.3, cx + aR * 0.8, cy + aR * 0.95);
-  ctx.quadraticCurveTo(cx, cy + aR * 1.2, cx - aR * 0.8, cy + aR * 0.95);
-  ctx.bezierCurveTo(cx - aR * 1.8, cy - aR * 0.3, cx - aR * 0.9, cy - aR * 1.3, cx, cy - aR * 0.8);
+  ctx.roundRect(x, y, iconSize, iconSize, 8 * scale);
   ctx.fill();
-
-  ctx.strokeStyle = "white";
-  ctx.lineWidth = 2 * scale;
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - aR * 0.8);
-  ctx.quadraticCurveTo(cx, cy - aR * 1.4, cx + aR * 0.4, cy - aR * 1.5);
-  ctx.stroke();
   
+  // "AI" text as icon placeholder
   ctx.fillStyle = "white";
-  ctx.beginPath();
-  ctx.ellipse(cx + aR*0.4, cy - aR*1.3, aR*0.3, aR*0.15, -Math.PI/4, 0, Math.PI*2);
-  ctx.fill();
-
-  ctx.fillStyle = "#111827"; 
-  ctx.font = `800 ${8 * scale}px Inter, sans-serif`;
+  ctx.font = `bold ${12 * scale}px Inter, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("AI Cal", cx, cy + 1 * scale);
-
-  ctx.fillStyle = "#111827"; 
-  ctx.font = `800 ${32 * scale}px Inter, sans-serif`; 
+  ctx.fillText("AI", x + iconSize/2, y + iconSize/2 + 1*scale);
+  
+  // Brand Text
+  ctx.fillStyle = "#111827";
+  ctx.font = `bold ${20 * scale}px Inter, sans-serif`;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  ctx.fillText("AI Cal", x + logoSize + 16 * scale, y + logoSize / 2);
+  ctx.fillText("AI Cal", x + iconSize + 10 * scale, y + iconSize/2);
 }
 
-function drawNewMacroCard(ctx: CanvasRenderingContext2D, label: string, value: string, icon: string, bg: string, color: string, x: number, y: number, w: number, h: number, scale: number) {
-  ctx.fillStyle = bg;
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, 16 * scale);
-  ctx.fill();
-  ctx.strokeStyle = color + "40"; 
-  ctx.lineWidth = 1 * scale;
-  ctx.stroke();
-  
-  const headerY = y + 16 * scale;
-  ctx.font = `500 ${13 * scale}px Inter, sans-serif`; 
-  ctx.fillStyle = "#374151"; 
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  ctx.fillText(icon, x + 12 * scale, headerY);
-  ctx.fillText(label, x + 36 * scale, headerY);
-  
-  ctx.font = `bold ${20 * scale}px Inter, sans-serif`; 
-  ctx.fillStyle = "#111827"; 
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(value, x + w/2, y + h - 20 * scale);
+function drawNewMacroCard(
+    ctx: CanvasRenderingContext2D, 
+    label: string, 
+    value: string, 
+    icon: string, 
+    bgColor: string, 
+    accentColor: string, 
+    x: number, 
+    y: number, 
+    w: number, 
+    h: number, 
+    scale: number
+) {
+    ctx.fillStyle = bgColor;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, 12 * scale);
+    ctx.fill();
+    
+    // Icon
+    ctx.font = `${16 * scale}px Inter, sans-serif`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#111827";
+    ctx.fillText(icon, x + 10 * scale, y + 10 * scale);
+    
+    // Label
+    ctx.fillStyle = "#6b7280";
+    ctx.font = `600 ${11 * scale}px Inter, sans-serif`;
+    ctx.fillText(label.toUpperCase(), x + 34 * scale, y + 11 * scale);
+    
+    // Value
+    ctx.fillStyle = "#111827";
+    ctx.font = `bold ${18 * scale}px Inter, sans-serif`;
+    ctx.textBaseline = "bottom";
+    ctx.fillText(value, x + 10 * scale, y + h - 10 * scale);
 }
-
-// --- Layout Helpers (Unchanged) ---
 
 export const getInitialLayout = (
   imgWidth: number, 
@@ -779,7 +811,9 @@ export const resizeImage = async (file: File, maxDimension: number = 1024, cropT
         ctx.imageSmoothingQuality = 'high';
 
         ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, dWidth, dHeight);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        
+        // CHANGE: Increased quality to 0.95 (Near Max)
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
         const base64 = dataUrl.split(",")[1];
         resolve({ base64, mimeType: "image/jpeg" });
       };

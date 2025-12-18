@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop, LayoutTemplate, Plus, Eye, EyeOff, Smartphone } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop, LayoutTemplate, Plus, Eye, EyeOff, Smartphone, LayoutGrid } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion, FoodAnalysis } from './types';
 import { analyzeFoodImage } from './services/geminiService';
-import { resizeImage, getInitialLayout, drawScene, renderFinalImage } from './utils/canvasUtils';
+import { resizeImage, getInitialLayout, drawScene, renderFinalImage, generateCollage } from './utils/canvasUtils';
 
 // --- Google Drive Configuration ---
 const DEFAULT_GOOGLE_CLIENT_ID = "959444237240-lca07hnf1qclkj3o93o1k3kuo65bkqr7.apps.googleusercontent.com"; 
@@ -59,6 +59,17 @@ function App() {
   const [deleteAfterSave, setDeleteAfterSave] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [autoCrop, setAutoCrop] = useState(false);
+
+  // Collage State
+  const [showCollageModal, setShowCollageModal] = useState(false);
+  const [collagePreviewUrl, setCollagePreviewUrl] = useState<string | null>(null);
+  const [collageConfig, setCollageConfig] = useState({
+      width: 2160,
+      height: 2160,
+      padding: 40,
+      color: '#ffffff'
+  });
+  const [isGeneratingCollage, setIsGeneratingCollage] = useState(false);
 
   // Gemini Settings
   const [geminiApiKey, setGeminiApiKey] = useState(process.env.API_KEY || "");
@@ -189,6 +200,44 @@ function App() {
     defaultTitlePos, 
     defaultCardPos
   ]);
+
+  // --- Collage Preview Effect ---
+  useEffect(() => {
+    if (!showCollageModal || batchSelection.size !== 4) return;
+    
+    const run = async () => {
+        setIsGeneratingCollage(true);
+        try {
+            const selectedIds = Array.from(batchSelection);
+            // Get images in selection order if possible, or queue order
+            // Here we just grab them from the queue that matches selection
+            const selectedImgs = images.filter(img => selectedIds.includes(img.id));
+            
+            // Extract preview URLs (blobs)
+            // If they are not complete yet, we use what we have (original file preview)
+            // Ideally we use the *processed* result if available (with labels), 
+            // BUT the user request says "Just collage function, no need label/identify food". 
+            // So we strictly use the original clean images (or the cropped ones if autoCrop was used?).
+            // Let's use the 'previewUrl' which contains the loaded/resized image.
+            
+            const urls = selectedImgs.map(img => img.previewUrl);
+            
+            if (urls.length === 4) {
+                const url = await generateCollage(urls, collageConfig);
+                setCollagePreviewUrl(url);
+            }
+        } catch (e) {
+            console.error("Collage gen error", e);
+        } finally {
+            setIsGeneratingCollage(false);
+        }
+    };
+    
+    const timeout = setTimeout(run, 500); // Debounce slightly
+    return () => clearTimeout(timeout);
+
+  }, [showCollageModal, collageConfig, batchSelection, images]);
+
 
   const saveSettings = () => {
     localStorage.setItem('aical_google_client_id', googleClientId);
@@ -553,6 +602,43 @@ function App() {
     if (accessToken) { createFolderPicker(accessToken, (fid) => performBatchUpload(accessToken, fid)); } 
     else { requestGoogleAuth((token) => createFolderPicker(token, (fid) => performBatchUpload(token, fid))); }
   };
+  
+  const handleDownloadCollage = () => {
+      if (!collagePreviewUrl) return;
+      const a = document.createElement('a');
+      a.href = collagePreviewUrl;
+      const date = new Date().toISOString().split('T')[0];
+      a.download = `Collage-${date}.jpg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+  };
+  
+  const handleSaveCollageToDrive = async () => {
+    if (!collagePreviewUrl) return;
+    const performUpload = async (token: string, folderId: string) => {
+        setIsUploading(true);
+        try {
+            const blob = dataURLtoBlob(collagePreviewUrl);
+            const date = new Date().toISOString().split('T')[0];
+            const fileName = `Collage-${date}.jpg`;
+            const metadata = { name: fileName, mimeType: 'image/jpeg', parents: [folderId] };
+            const formData = new FormData();
+            formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+            formData.append('file', blob);
+            const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: formData
+            });
+            if (!response.ok) throw new Error('Upload failed');
+            alert(`✅ Collage Saved to Google Drive!\nFile: ${fileName}`);
+        } catch (error: any) { alert("Failed: " + error.message); } 
+        finally { setIsUploading(false); }
+    };
+    if (accessToken) { createFolderPicker(accessToken, (fid) => performUpload(accessToken, fid)); } 
+    else { requestGoogleAuth((token) => createFolderPicker(token, (fid) => performUpload(token, fid))); }
+  };
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const newImages: ProcessedImage[] = acceptedFiles.map((file) => ({
@@ -582,7 +668,8 @@ function App() {
         try {
             setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'analyzing' } : p));
             // PASS autoCrop here to resizeImage
-            const { base64: base64Data, mimeType } = await resizeImage(imgData.file, 1024, autoCrop);
+            // CHANGE: Increased resolution from 1024 to 2560 for high quality export
+            const { base64: base64Data, mimeType } = await resizeImage(imgData.file, 2560, autoCrop);
             
             const correctedPreviewUrl = `data:${mimeType};base64,${base64Data}`;
             const analysis = await analyzeFoodImage(base64Data, mimeType, geminiApiKey, geminiApiUrl);
@@ -854,6 +941,39 @@ function App() {
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
+  const handleSaveCurrentAsDefault = () => {
+    if (!selectedImage || !selectedImage.layout) return;
+    const l = selectedImage.layout;
+
+    setDefaultTitleScale(l.mealType.scale);
+    setDefaultCardScale(l.card.scale);
+    
+    // Positions: convert 0-1 float back to 0-100 int/float
+    const newTitlePos = { x: parseFloat((l.mealType.x * 100).toFixed(1)), y: parseFloat((l.mealType.y * 100).toFixed(1)) };
+    const newCardPos = { x: parseFloat((l.card.x * 100).toFixed(1)), y: parseFloat((l.card.y * 100).toFixed(1)) };
+    
+    setDefaultTitlePos(newTitlePos);
+    setDefaultCardPos(newCardPos);
+
+    if (l.labels.length > 0) {
+        setDefaultLabelScale(l.labels[0].scale);
+        setDefaultLabelStyle(l.labels[0].style);
+    }
+
+    // Save to LocalStorage
+    localStorage.setItem('aical_default_title_scale', String(l.mealType.scale));
+    localStorage.setItem('aical_default_card_scale', String(l.card.scale));
+    localStorage.setItem('aical_default_title_pos', JSON.stringify(newTitlePos));
+    localStorage.setItem('aical_default_card_pos', JSON.stringify(newCardPos));
+    
+    if (l.labels.length > 0) {
+        localStorage.setItem('aical_default_label_scale', String(l.labels[0].scale));
+        localStorage.setItem('aical_default_label_style', l.labels[0].style);
+    }
+    
+    alert("✅ Defaults Updated!\n\nCurrent layout sizes and positions have been saved. Future images will use these settings.");
+  };
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 font-sans text-gray-800">
@@ -910,6 +1030,12 @@ function App() {
                     <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all shadow-sm`} style={{left: autoCrop ? 'calc(100% - 14px)' : '2px'}}></div>
                 </div>
             </div>
+
+            {batchSelection.size === 4 && (
+                <button onClick={() => setShowCollageModal(true)} className="w-full flex items-center justify-center gap-2 bg-purple-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm animate-in slide-in-from-top-2">
+                    <LayoutGrid size={16} /> Create 2x2 Collage
+                </button>
+            )}
 
             {batchSelection.size > 0 && <div className="flex flex-col gap-2 animate-in slide-in-from-top-2 duration-200"><div className="flex items-center gap-2"><Tag size={14} className="text-gray-400" /><input type="text" value={exportTag} onChange={(e) => setExportTag(e.target.value)} className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:border-black focus:ring-1 focus:ring-black outline-none" placeholder="Style Tag" /></div><button onClick={handleBatchSaveToDrive} disabled={isUploading} className="w-full flex items-center justify-center gap-2 bg-black text-white py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors shadow-sm">{isUploading ? <Loader2 className="animate-spin" size={14}/> : <CloudUpload size={14} />}Save {batchSelection.size} to Drive</button></div>}
           </div>
@@ -992,7 +1118,10 @@ function App() {
 
                 {selectedImage.status === 'complete' && selectedImage.layout && (
                   <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                    <div className="flex items-center gap-2 mb-3 text-gray-500"><SlidersHorizontal size={16} /><h4 className="text-xs font-semibold uppercase tracking-wider">Editor Controls</h4></div>
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2 text-gray-500"><SlidersHorizontal size={16} /><h4 className="text-xs font-semibold uppercase tracking-wider">Editor Controls</h4></div>
+                        <button onClick={handleSaveCurrentAsDefault} className="text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 hover:text-blue-800 px-2 py-1 rounded transition-colors flex items-center gap-1" title="Save current positions and sizes as defaults"><Sparkles size={12}/> Set as Default</button>
+                    </div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                       <div className="space-y-6">
                           <h5 className="font-medium text-sm text-gray-900 border-b pb-2">Main Elements</h5>
@@ -1080,6 +1209,80 @@ function App() {
         </div>
         <div className="absolute top-4 right-4 z-50"></div>
       </main>
+      
+      {/* Collage Modal */}
+      {showCollageModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-2xl shadow-xl max-w-5xl w-full p-0 overflow-hidden flex flex-col md:flex-row max-h-[90vh]">
+                {/* Left: Controls */}
+                <div className="w-full md:w-1/3 p-6 border-r border-gray-100 bg-gray-50 overflow-y-auto">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-xl font-bold flex items-center gap-2"><LayoutGrid className="text-purple-600"/> Collage</h2>
+                        <button onClick={() => setShowCollageModal(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-200"><X size={20}/></button>
+                    </div>
+                    
+                    <div className="space-y-6">
+                        {/* Size Controls */}
+                        <div>
+                             <label className="block text-sm font-semibold text-gray-700 mb-2">Output Size</label>
+                             <div className="grid grid-cols-2 gap-2 mb-3">
+                                 <button onClick={() => setCollageConfig({...collageConfig, width: 2160, height: 2160})} className={`text-xs py-2 rounded border ${collageConfig.width === 2160 && collageConfig.height === 2160 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Square (2K)</button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, width: 1080, height: 1920})} className={`text-xs py-2 rounded border ${collageConfig.width === 1080 && collageConfig.height === 1920 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Story (9:16)</button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, width: 1080, height: 1350})} className={`text-xs py-2 rounded border ${collageConfig.width === 1080 && collageConfig.height === 1350 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Portrait (4:5)</button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, width: 3840, height: 2160})} className={`text-xs py-2 rounded border ${collageConfig.width === 3840 && collageConfig.height === 2160 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Landscape (4K)</button>
+                             </div>
+                             <div className="flex gap-2">
+                                 <div><label className="text-xs text-gray-500">Width</label><input type="number" value={collageConfig.width} onChange={(e) => setCollageConfig({...collageConfig, width: parseInt(e.target.value) || 1000})} className="w-full px-3 py-2 border rounded-md text-sm" /></div>
+                                 <div><label className="text-xs text-gray-500">Height</label><input type="number" value={collageConfig.height} onChange={(e) => setCollageConfig({...collageConfig, height: parseInt(e.target.value) || 1000})} className="w-full px-3 py-2 border rounded-md text-sm" /></div>
+                             </div>
+                        </div>
+
+                        {/* Padding Control */}
+                        <div>
+                             <div className="flex justify-between mb-1"><label className="text-sm font-semibold text-gray-700">Padding</label><span className="text-xs text-gray-500">{collageConfig.padding}px</span></div>
+                             <input type="range" min="0" max="200" value={collageConfig.padding} onChange={(e) => setCollageConfig({...collageConfig, padding: parseInt(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"/>
+                        </div>
+
+                        {/* Color Control */}
+                         <div>
+                             <label className="text-sm font-semibold text-gray-700 mb-2 block">Background Color</label>
+                             <div className="flex gap-2">
+                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#ffffff'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#ffffff' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#fff'}}></button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#000000'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#000000' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#000'}}></button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#f3f4f6'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#f3f4f6' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#f3f4f6'}}></button>
+                                 <input type="color" value={collageConfig.color} onChange={(e) => setCollageConfig({...collageConfig, color: e.target.value})} className="w-8 h-8 p-0 border-0 rounded-full overflow-hidden cursor-pointer" />
+                             </div>
+                        </div>
+                    </div>
+
+                    <div className="mt-8 space-y-3">
+                        <button onClick={handleDownloadCollage} disabled={!collagePreviewUrl} className="w-full flex items-center justify-center gap-2 bg-black text-white py-3 rounded-xl font-medium hover:bg-gray-800 transition-colors">
+                            <Download size={18}/> Download Image
+                        </button>
+                        <button onClick={handleSaveCollageToDrive} disabled={!collagePreviewUrl || isUploading} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 text-gray-700 py-3 rounded-xl font-medium hover:bg-gray-50 transition-colors">
+                            {isUploading ? <Loader2 className="animate-spin" size={18}/> : <CloudUpload size={18}/>} Save to Drive
+                        </button>
+                    </div>
+                </div>
+
+                {/* Right: Preview */}
+                <div className="w-full md:w-2/3 bg-gray-200 flex items-center justify-center p-8 relative">
+                    <div className="absolute inset-0 pattern-grid opacity-10 pointer-events-none"></div>
+                    {isGeneratingCollage ? (
+                        <div className="flex flex-col items-center gap-3 bg-white/80 p-6 rounded-xl backdrop-blur-sm shadow-lg">
+                            <Loader2 className="animate-spin text-purple-600" size={32}/>
+                            <span className="font-medium text-gray-600">Generating Preview...</span>
+                        </div>
+                    ) : collagePreviewUrl ? (
+                        <img src={collagePreviewUrl} className="max-w-full max-h-[70vh] shadow-2xl rounded-sm object-contain bg-white" alt="Collage Preview"/>
+                    ) : (
+                        <span className="text-gray-400">Preview not available</span>
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
+
       {showDriveSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-6xl w-full p-6 animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
