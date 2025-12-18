@@ -79,3 +79,8 @@ export interface HitRegion {
   h: number; // Height in pixels
   rotation?: number;
 }
+
+export interface CollageLabel {
+  name: string;
+  calories: string;
+}

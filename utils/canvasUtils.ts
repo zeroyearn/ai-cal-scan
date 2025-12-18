@@ -1,4 +1,4 @@
-import { FoodAnalysis, ImageLayout, LayoutConfig, ElementState, LabelState, HitRegion } from "../types";
+import { FoodAnalysis, ImageLayout, LayoutConfig, ElementState, LabelState, HitRegion, CollageLabel } from "../types";
 
 const CARD_SCALE_MODIFIER = 1.0;
 
@@ -110,10 +110,13 @@ export const renderFinalImage = async (
 
 /**
  * Generates a 2x2 Collage from 4 images
+ * Supports optional single label in the center
  */
 export const generateCollage = async (
   imageUrls: string[],
-  config: { width: number; height: number; padding: number; color: string }
+  config: { width: number; height: number; padding: number; color: string },
+  label?: CollageLabel,
+  labelSettings?: { scale: number; y: number }
 ): Promise<string> => {
     if (imageUrls.length !== 4) throw new Error("Collage requires exactly 4 images");
 
@@ -137,15 +140,6 @@ export const generateCollage = async (
     ctx.fillRect(0, 0, config.width, config.height);
 
     // Calculate Grid
-    // 2x2 Grid
-    // Cell size calculation:
-    // Total width = 2 * cellW + 3 * padding (outer + inner + outer)
-    // Actually typically: Outer padding around the whole group, and inner padding between items.
-    // Let's assume 'padding' is applied between items AND around the edges uniformly.
-    
-    // Width available for images = TotalWidth - (3 * padding)
-    // Cell Width = Available / 2
-    
     const p = config.padding;
     const cellW = (config.width - (3 * p)) / 2;
     const cellH = (config.height - (3 * p)) / 2;
@@ -166,16 +160,12 @@ export const generateCollage = async (
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
+    // Draw Images
     images.forEach((img, i) => {
         const pos = positions[i];
-        
-        // Draw Image using 'object-fit: cover' logic
-        // We want to fill [pos.x, pos.y, cellW, cellH] with img
-        
         const scale = Math.max(cellW / img.width, cellH / img.height);
         const renderW = img.width * scale;
         const renderH = img.height * scale;
-        
         const offsetX = (cellW - renderW) / 2;
         const offsetY = (cellH - renderH) / 2;
         
@@ -183,13 +173,87 @@ export const generateCollage = async (
         ctx.beginPath();
         ctx.rect(pos.x, pos.y, cellW, cellH);
         ctx.clip(); // Clip to cell box
-        
         ctx.drawImage(img, pos.x + offsetX, pos.y + offsetY, renderW, renderH);
         ctx.restore();
     });
 
+    // Draw Center Label if provided
+    if (label && label.name) {
+      // Scale calculation for label:
+      const referenceWidth = 1000;
+      const baseScale = (config.width / referenceWidth); 
+      
+      // Use provided scale modifier or default to 2.5
+      const modifier = labelSettings?.scale ?? 2.5; 
+      const labelScale = baseScale * modifier;
+
+      const centerX = config.width / 2;
+      
+      // Use provided Y % or default to 50%
+      const yPct = labelSettings?.y ?? 50;
+      const centerY = config.height * (yPct / 100);
+      
+      let displayText = label.name;
+      if (label.calories) {
+           displayText += `\n${label.calories}`;
+      }
+      
+      drawCollageCenterLabel(ctx, displayText, centerX, centerY, labelScale);
+    }
+
     return canvas.toDataURL("image/jpeg", 0.95);
 };
+
+// Simplified Center Label Drawer for Collage
+function drawCollageCenterLabel(ctx: CanvasRenderingContext2D, text: string, centerX: number, centerY: number, scale: number) {
+  const lines = text.split('\n');
+  
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+  ctx.miterLimit = 2;
+
+  if (lines.length > 1) {
+      // Two lines: Name (Large) + Calories (Smaller)
+      const fontSize1 = 60 * scale;
+      const fontSize2 = 36 * scale;
+      const lineHeight = fontSize1 * 0.6 + fontSize2 * 0.6; // Distance between centers
+      
+      const y1 = centerY - (lineHeight * 0.4); 
+      const y2 = centerY + (lineHeight * 0.6); 
+
+      // Line 1
+      ctx.font = `800 ${fontSize1}px Inter, sans-serif`;
+      ctx.lineWidth = 12 * scale;
+      ctx.strokeStyle = "black";
+      ctx.strokeText(lines[0], centerX, y1);
+      ctx.fillStyle = "white";
+      ctx.fillText(lines[0], centerX, y1);
+
+      // Line 2
+      ctx.font = `700 ${fontSize2}px Inter, sans-serif`;
+      ctx.lineWidth = 8 * scale;
+      ctx.strokeStyle = "black";
+      ctx.strokeText(lines[1], centerX, y2);
+      ctx.fillStyle = "white";
+      ctx.fillText(lines[1], centerX, y2);
+
+  } else {
+      // Single Line
+      const fontSize = 60 * scale;
+      ctx.font = `800 ${fontSize}px Inter, sans-serif`;
+      
+      ctx.lineWidth = 12 * scale;
+      ctx.strokeStyle = "black";
+      ctx.strokeText(text, centerX, centerY);
+      
+      ctx.fillStyle = "white";
+      ctx.fillText(text, centerX, centerY);
+  }
+  
+  ctx.restore();
+}
 
 
 // --- Internal Drawing Functions (Returns Bounding Box for Hit Testing) ---

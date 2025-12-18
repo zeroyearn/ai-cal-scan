@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop, LayoutTemplate, Plus, Eye, EyeOff, Smartphone, LayoutGrid } from 'lucide-react';
-import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion, FoodAnalysis } from './types';
-import { analyzeFoodImage } from './services/geminiService';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop, LayoutTemplate, Plus, Eye, EyeOff, Smartphone, LayoutGrid, ScanSearch } from 'lucide-react';
+import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion, FoodAnalysis, CollageLabel } from './types';
+import { analyzeFoodImage, analyzeCollage } from './services/geminiService';
 import { resizeImage, getInitialLayout, drawScene, renderFinalImage, generateCollage } from './utils/canvasUtils';
 
 // --- Google Drive Configuration ---
@@ -43,7 +43,7 @@ const dataURLtoBlob = (dataurl: string) => {
     return new Blob([u8arr], {type:mime});
 };
 
-function App() {
+export default function App() {
   // --- Authentication State ---
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return localStorage.getItem('aical_is_authenticated') === 'true';
@@ -70,6 +70,11 @@ function App() {
       color: '#ffffff'
   });
   const [isGeneratingCollage, setIsGeneratingCollage] = useState(false);
+  // Change state from Array to Single Object
+  const [collageLabel, setCollageLabel] = useState<CollageLabel>({ name: "", calories: "" });
+  const [collageLabelScale, setCollageLabelScale] = useState(2.5);
+  const [collageLabelY, setCollageLabelY] = useState(50);
+  const [isAnalyzingCollage, setIsAnalyzingCollage] = useState(false);
 
   // Gemini Settings
   const [geminiApiKey, setGeminiApiKey] = useState(process.env.API_KEY || "");
@@ -209,21 +214,17 @@ function App() {
         setIsGeneratingCollage(true);
         try {
             const selectedIds = Array.from(batchSelection);
-            // Get images in selection order if possible, or queue order
-            // Here we just grab them from the queue that matches selection
             const selectedImgs = images.filter(img => selectedIds.includes(img.id));
-            
-            // Extract preview URLs (blobs)
-            // If they are not complete yet, we use what we have (original file preview)
-            // Ideally we use the *processed* result if available (with labels), 
-            // BUT the user request says "Just collage function, no need label/identify food". 
-            // So we strictly use the original clean images (or the cropped ones if autoCrop was used?).
-            // Let's use the 'previewUrl' which contains the loaded/resized image.
-            
             const urls = selectedImgs.map(img => img.previewUrl);
             
             if (urls.length === 4) {
-                const url = await generateCollage(urls, collageConfig);
+                // Pass optional single label to the generator
+                const url = await generateCollage(
+                    urls, 
+                    collageConfig, 
+                    collageLabel,
+                    { scale: collageLabelScale, y: collageLabelY }
+                );
                 setCollagePreviewUrl(url);
             }
         } catch (e) {
@@ -233,10 +234,10 @@ function App() {
         }
     };
     
-    const timeout = setTimeout(run, 500); // Debounce slightly
+    const timeout = setTimeout(run, 500); // Debounce
     return () => clearTimeout(timeout);
 
-  }, [showCollageModal, collageConfig, batchSelection, images]);
+  }, [showCollageModal, collageConfig, batchSelection, images, collageLabel, collageLabelScale, collageLabelY]);
 
 
   const saveSettings = () => {
@@ -640,6 +641,21 @@ function App() {
     else { requestGoogleAuth((token) => createFolderPicker(token, (fid) => performUpload(token, fid))); }
   };
 
+  const handleIdentifyCollage = async () => {
+    if (!collagePreviewUrl) return;
+    setIsAnalyzingCollage(true);
+    try {
+        // base64 without prefix
+        const base64 = collagePreviewUrl.split(',')[1];
+        const results = await analyzeCollage(base64, geminiApiKey, geminiApiUrl);
+        setCollageLabel(results);
+    } catch (e: any) {
+        alert("Analysis failed: " + e.message);
+    } finally {
+        setIsAnalyzingCollage(false);
+    }
+  };
+
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const newImages: ProcessedImage[] = acceptedFiles.map((file) => ({
       id: Math.random().toString(36).substr(2, 9),
@@ -1007,18 +1023,32 @@ function App() {
       </header>
       <main className="flex-1 flex overflow-hidden">
         <div className="w-1/3 min-w-[350px] max-w-[450px] bg-white border-r border-gray-200 flex flex-col z-10">
-          <div className="p-6 shrink-0 space-y-3">
-            <div {...getRootProps()} className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-colors ${isDragActive ? 'border-green-500 bg-green-50' : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50'}`}>
+          <div className="p-4 shrink-0 space-y-3">
+            <div {...getRootProps()} className={`border-2 border-dashed rounded-xl p-4 flex items-center gap-4 cursor-pointer transition-all group ${isDragActive ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-400 hover:bg-gray-50'}`}>
               <input {...getInputProps()} />
-              <div className="flex flex-col items-center gap-3"><div className="bg-gray-100 p-3 rounded-full"><Upload className="text-gray-500" size={24} /></div><div><p className="font-semibold text-gray-700">Click or drag images here</p><p className="text-sm text-gray-500 mt-1">Supports JPG, PNG</p></div></div>
+              <div className={`p-3 rounded-full shrink-0 transition-colors ${isDragActive ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500 group-hover:bg-white group-hover:text-black shadow-sm'}`}>
+                <Upload size={20} />
+              </div>
+              <div className="text-left">
+                <p className={`font-semibold text-sm ${isDragActive ? 'text-green-700' : 'text-gray-900'}`}>Click or drop images</p>
+                <p className={`text-xs ${isDragActive ? 'text-green-600' : 'text-gray-400'}`}>JPG, PNG supported</p>
+              </div>
             </div>
+            
             <div className="flex gap-2">
-                <button onClick={handleDriveImport} disabled={isDriveLoading} className="flex-1 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 font-medium py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-sm">{isDriveLoading ? <Loader2 className="animate-spin" size={18} /> : <Cloud size={18} />}<span>Import from Google Drive</span></button>
-                <button onClick={() => setShowDriveSettings(true)} className="bg-white border border-gray-300 text-gray-500 hover:text-gray-700 hover:bg-gray-50 p-2.5 rounded-xl shadow-sm transition-colors" title="Settings"><Settings size={20} /></button>
-                <button onClick={() => setShowHelp(true)} className="bg-white border border-gray-300 text-gray-500 hover:text-gray-700 hover:bg-gray-50 p-2.5 rounded-xl shadow-sm transition-colors" title="Usage Guide"><BookOpen size={20} /></button>
+                <button onClick={handleDriveImport} disabled={isDriveLoading} className="flex-1 bg-white border border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50 font-medium py-2 px-3 rounded-lg flex items-center justify-center gap-2 transition-all shadow-sm text-sm h-10">
+                    {isDriveLoading ? <Loader2 className="animate-spin" size={16} /> : <Cloud size={16} className="text-blue-600" />}
+                    <span>Google Drive</span>
+                </button>
+                <button onClick={() => setShowDriveSettings(true)} className="bg-white border border-gray-200 text-gray-500 hover:text-gray-900 hover:border-gray-300 hover:bg-gray-50 w-10 h-10 flex items-center justify-center rounded-lg shadow-sm transition-all" title="Settings">
+                    <Settings size={18} />
+                </button>
+                <button onClick={() => setShowHelp(true)} className="bg-white border border-gray-200 text-gray-500 hover:text-gray-900 hover:border-gray-300 hover:bg-gray-50 w-10 h-10 flex items-center justify-center rounded-lg shadow-sm transition-all" title="Usage Guide">
+                    <BookOpen size={18} />
+                </button>
             </div>
           </div>
-          <div className="flex flex-col px-6 py-4 border-b border-gray-100 bg-gray-50/50 gap-3">
+          <div className="flex flex-col px-4 py-3 border-b border-gray-100 bg-gray-50/50 gap-3">
             <div className="flex justify-between items-center"><span className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Queue ({images.length})</span><button onClick={toggleSelectAll} className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors" disabled={images.length === 0}>{batchSelection.size === images.length && images.length > 0 ? 'Deselect All' : 'Select All'}</button></div>
             
              <div className="flex items-center justify-between bg-white border border-gray-200 p-2 rounded-lg cursor-pointer hover:border-gray-300 transition-colors" onClick={() => setAutoCrop(!autoCrop)}>
@@ -1114,365 +1144,277 @@ function App() {
                   </div>
                 </div>
 
-                {selectedImage.status === 'complete' && selectedImage.analysis?.hasExistingText && <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-start gap-3 text-yellow-800"><AlertTriangle className="shrink-0 mt-0.5" size={20} /><div><p className="font-semibold text-sm">Existing Text Detected</p><p className="text-xs mt-1 text-yellow-700">The AI detected existing nutrition labels or heavy text overlays on this image. The automated layout might overlap with original content.</p></div></div>}
-
-                {selectedImage.status === 'complete' && selectedImage.layout && (
-                  <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2 text-gray-500"><SlidersHorizontal size={16} /><h4 className="text-xs font-semibold uppercase tracking-wider">Editor Controls</h4></div>
-                        <button onClick={handleSaveCurrentAsDefault} className="text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 hover:text-blue-800 px-2 py-1 rounded transition-colors flex items-center gap-1" title="Save current positions and sizes as defaults"><Sparkles size={12}/> Set as Default</button>
-                    </div>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                      <div className="space-y-6">
-                          <h5 className="font-medium text-sm text-gray-900 border-b pb-2">Main Elements</h5>
-                          
-                          {/* Meal Title Control */}
-                          <div className="flex items-center gap-2">
-                             {selectedImage.layout.mealType.visible ? (
-                                <>
-                                  <div className="flex-1 flex flex-col gap-1">
-                                      <div className="flex justify-between text-xs font-medium text-gray-600"><span>Meal Title Size</span><span>{Math.round(selectedImage.layout.mealType.scale * 100)}%</span></div>
-                                      <input type="range" min="0" max="20" step="0.1" value={selectedImage.layout.mealType.scale} onChange={(e) => handleScaleChange('title', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
-                                  </div>
-                                  <button onClick={() => handleVisibilityToggle('title', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Title"><Trash2 size={16}/></button>
-                                </>
-                             ) : (
-                                <div className="flex-1 flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200 border-dashed">
-                                    <span className="text-sm text-gray-400 italic">Meal Title Hidden</span>
-                                    <button onClick={() => handleVisibilityToggle('title', true)} className="flex items-center gap-1.5 text-xs font-medium bg-white border border-gray-200 px-3 py-1.5 rounded-md hover:text-blue-600 hover:border-blue-200 transition-colors"><Plus size={14}/> Restore</button>
-                                </div>
-                             )}
-                          </div>
-
-                          {/* Nutrition Card Control */}
-                          <div className="flex items-center gap-2">
-                              {selectedImage.layout.card.visible ? (
-                                <>
-                                  <div className="flex-1 flex flex-col gap-1">
-                                      <div className="flex justify-between text-xs font-medium text-gray-600"><span>Nutrition Card Size</span><span>{Math.round(selectedImage.layout.card.scale * 100)}%</span></div>
-                                      <input type="range" min="0" max="20" step="0.1" value={selectedImage.layout.card.scale} onChange={(e) => handleScaleChange('card', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
-                                  </div>
-                                  <button onClick={() => handleVisibilityToggle('card', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Card"><Trash2 size={16}/></button>
-                                </>
-                              ) : (
-                                <div className="flex-1 flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200 border-dashed">
-                                    <span className="text-sm text-gray-400 italic">Nutrition Card Hidden</span>
-                                    <button onClick={() => handleVisibilityToggle('card', true)} className="flex items-center gap-1.5 text-xs font-medium bg-white border border-gray-200 px-3 py-1.5 rounded-md hover:text-blue-600 hover:border-blue-200 transition-colors"><Plus size={14}/> Restore</button>
-                                </div>
-                              )}
-                          </div>
-                      </div>
-                      <div>
-                          <h5 className="font-medium text-sm text-gray-900 border-b pb-2 mb-4">Detected Food Labels</h5>
-                          <div className="space-y-3 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                              {selectedImage.layout.labels.map(label => (
-                                  <div key={label.id} className="flex items-center gap-3 bg-gray-50 p-2 rounded-lg border border-gray-100 hover:border-gray-300 transition-colors">
-                                      <span className="text-sm font-medium w-32 truncate text-gray-700 cursor-help" title={label.text}>{label.text}</span>
-                                      <div className="flex-1 flex flex-col justify-center"><input type="range" min="0" max="20" step="0.1" value={label.scale} onChange={(e) => handleLabelScaleChange(label.id, parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600" /></div>
-                                      <div className="flex items-center gap-1">
-                                         <button onClick={() => handleStyleCycle(label.id)} className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-all" title="Toggle Style">
-                                            {label.style === 'default' && <LinkIcon size={16} />}
-                                            {label.style === 'pill' && <Tag size={16} />}
-                                            {label.style === 'text' && <TypeIcon size={16} />}
-                                         </button>
-                                         <button onClick={() => handleDeleteLabel(label.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-all"><Trash2 size={16} /></button>
-                                      </div>
-                                  </div>
-                              ))}
-                          </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                  <div>
-                    <h3 className="font-semibold text-gray-900">{selectedImage.analysis?.summary || selectedImage.file.name}</h3>
-                    {selectedImage.analysis && <p className="text-sm text-gray-500">{selectedImage.analysis.items.length} items detected • {selectedImage.analysis.nutrition.calories} kcal</p>}
-                  </div>
-                  {selectedImage.status === 'complete' && (
-                    <div className="flex items-end gap-3">
-                        <div className="flex flex-col items-end">
-                             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1"><Tag size={10} /> Filename Tag</label>
-                             <input type="text" value={exportTag} onChange={(e) => setExportTag(e.target.value)} className="w-32 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 focus:bg-white focus:border-black focus:ring-1 focus:ring-black outline-none transition-all text-right" placeholder="e.g. Food" />
-                        </div>
-                        <button onClick={handleSaveToDrive} disabled={isUploading} className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 shadow-sm transition-all ${isUploading ? 'bg-gray-100 text-gray-400' : 'bg-white hover:bg-gray-50 text-gray-700'}`} title="Save to Google Drive">{isUploading ? <Loader2 className="animate-spin" size={18} /> : <CloudUpload size={18} />}</button>
-                        <button onClick={handleDownload} className="flex items-center gap-2 bg-black text-white px-5 py-2.5 rounded-lg hover:bg-gray-800 transition-colors shadow-sm"><Download size={18} /> Download</button>
-                    </div>
-                  )}
-                </div>
+                {selectedImage.status === 'complete' && selectedImage.analysis?.hasExistingText && <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-start gap-3 text-yellow-800"><AlertTriangle className="shrink-0 mt-0.5" size={20} /><div><p className="font-medium">Text Detected</p><p className="text-xs">Original text may interfere with labeling.</p></div></div>}
               </div>
             ) : (
-              <div className="text-center text-gray-400"><div className="bg-white p-6 rounded-full inline-block shadow-sm mb-4"><ImageIcon size={48} className="text-gray-300" /></div><h3 className="text-lg font-medium text-gray-600">Select an image to preview</h3><p className="text-sm text-gray-400 mt-2">Processed images will appear here</p></div>
+               <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                  <ImageIcon size={64} className="mb-4 opacity-20" />
+                  <p>Select an image to start editing</p>
+               </div>
             )}
           </div>
         </div>
-        <div className="absolute top-4 right-4 z-50"></div>
+        
+        {/* Controls Sidebar - Placeholder or Actual controls would go here */}
+        {selectedImage && (
+             <div className="w-[300px] bg-white border-l border-gray-200 p-4 flex flex-col gap-4 overflow-y-auto">
+                <h3 className="font-bold text-gray-900">Editor</h3>
+                 <div className="space-y-4">
+                     <div>
+                         <label className="text-xs font-semibold text-gray-500 uppercase">Scale</label>
+                         <div className="flex items-center gap-2 mt-2">
+                             <SlidersHorizontal size={16} className="text-gray-400"/>
+                             <input 
+                                 type="range" 
+                                 min="1" max="10" step="0.1" 
+                                 value={selectedImage.layout?.mealType.scale || 1}
+                                 onChange={(e) => handleScaleChange('title', parseFloat(e.target.value))}
+                                 className="flex-1"
+                             />
+                         </div>
+                     </div>
+                     
+                     <div className="pt-4 border-t border-gray-100">
+                         <button onClick={handleSaveCurrentAsDefault} className="w-full py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors">Save Layout as Default</button>
+                     </div>
+                     
+                     <div className="pt-2">
+                         <button onClick={handleDownload} className="w-full py-2.5 bg-black text-white rounded-lg font-medium shadow-md hover:bg-gray-800 flex items-center justify-center gap-2"><Download size={16} /> Download Result</button>
+                     </div>
+                      <div className="pt-2">
+                         <button onClick={handleSaveToDrive} disabled={isUploading} className="w-full py-2.5 bg-blue-600 text-white rounded-lg font-medium shadow-md hover:bg-blue-700 flex items-center justify-center gap-2">{isUploading ? <Loader2 className="animate-spin" size={16}/> : <CloudUpload size={16} />} Save to Drive</button>
+                     </div>
+                 </div>
+             </div>
+        )}
       </main>
-      
+
+      {/* Settings Modal */}
+      {showDriveSettings && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => setShowDriveSettings(false)}>
+             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                     <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Settings size={20}/> Settings</h2>
+                     <button onClick={() => setShowDriveSettings(false)} className="p-2 hover:bg-gray-200 rounded-full transition-colors"><X size={20} /></button>
+                 </div>
+                 <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                     {/* Google Drive Section */}
+                     <section className="space-y-4">
+                         <h3 className="text-lg font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Cloud className="text-blue-500" size={20}/> Google Drive & Auth</h3>
+                         <div className="grid grid-cols-1 gap-4">
+                             <div>
+                                 <label className="block text-sm font-medium text-gray-700 mb-1">Google Client ID</label>
+                                 <input type="text" value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm" placeholder="apps.googleusercontent.com" />
+                             </div>
+                             <div>
+                                 <label className="block text-sm font-medium text-gray-700 mb-1">Google API Key</label>
+                                 <input type="text" value={googleApiKey} onChange={(e) => setGoogleApiKey(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm" placeholder="AIza..." />
+                             </div>
+                              <div className="flex items-center gap-2 mt-2">
+                                 <button onClick={handleResetAuth} className="text-sm text-red-600 hover:text-red-800 underline">Reset Authorization / Switch Account</button>
+                             </div>
+                         </div>
+                     </section>
+
+                     {/* Gemini API Section */}
+                     <section className="space-y-4">
+                         <h3 className="text-lg font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Sparkles className="text-purple-500" size={20}/> Gemini API</h3>
+                          <div className="grid grid-cols-1 gap-4">
+                             <div>
+                                 <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                                 <input type="password" value={geminiApiKey} onChange={(e) => setGeminiApiKey(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none font-mono text-sm" placeholder="AIza..." />
+                             </div>
+                             <div>
+                                 <label className="block text-sm font-medium text-gray-700 mb-1">Custom Base URL (Optional)</label>
+                                 <input type="text" value={geminiApiUrl} onChange={(e) => setGeminiApiUrl(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none font-mono text-sm" placeholder="https://generativelanguage.googleapis.com" />
+                                 <p className="text-xs text-gray-500 mt-1">Leave empty for default. Useful for proxies.</p>
+                             </div>
+                          </div>
+                     </section>
+
+                     {/* Appearance Section */}
+                     <section className="space-y-4">
+                         <h3 className="text-lg font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Palette className="text-pink-500" size={20}/> Appearance Defaults</h3>
+                         
+                         <div className="flex gap-8">
+                             <div className="flex-1 space-y-4">
+                                 <div>
+                                     <label className="block text-sm font-medium text-gray-700 mb-1">Label Style</label>
+                                     <div className="flex bg-gray-100 p-1 rounded-lg">
+                                         {(['default', 'pill', 'text'] as LabelStyle[]).map(style => (
+                                             <button key={style} onClick={() => setDefaultLabelStyle(style)} className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-all ${defaultLabelStyle === style ? 'bg-white shadow-sm text-black' : 'text-gray-500 hover:text-gray-900'}`}>{style.charAt(0).toUpperCase() + style.slice(1)}</button>
+                                         ))}
+                                     </div>
+                                 </div>
+                                 <div>
+                                     <label className="block text-sm font-medium text-gray-700 mb-1">Title Scale: {defaultTitleScale}</label>
+                                     <input type="range" min="1" max="15" step="0.1" value={defaultTitleScale} onChange={(e) => setDefaultTitleScale(parseFloat(e.target.value))} className="w-full accent-black" />
+                                 </div>
+                                 <div>
+                                     <label className="block text-sm font-medium text-gray-700 mb-1">Card Scale: {defaultCardScale}</label>
+                                     <input type="range" min="1" max="10" step="0.1" value={defaultCardScale} onChange={(e) => setDefaultCardScale(parseFloat(e.target.value))} className="w-full accent-black" />
+                                 </div>
+                             </div>
+                             
+                             {/* Live Preview Canvas */}
+                             <div className="w-[180px] shrink-0">
+                                 <label className="block text-xs font-semibold text-gray-500 uppercase mb-2 text-center">Preview</label>
+                                 <div className="w-full aspect-[9/16] bg-gray-200 rounded-lg overflow-hidden shadow-inner border border-gray-300">
+                                     <canvas ref={settingsCanvasRef} className="w-full h-full object-contain" />
+                                 </div>
+                             </div>
+                         </div>
+                     </section>
+
+                      {/* Behavior Section */}
+                     <section className="space-y-4">
+                         <h3 className="text-lg font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><SlidersHorizontal className="text-orange-500" size={20}/> Behavior</h3>
+                         <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+                             <div>
+                                 <p className="font-medium text-gray-900">Delete Original After Save</p>
+                                 <p className="text-xs text-gray-500">When saving to Drive, move the source image to trash.</p>
+                             </div>
+                             <div 
+                                 className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${deleteAfterSave ? 'bg-green-500' : 'bg-gray-300'}`}
+                                 onClick={() => setDeleteAfterSave(!deleteAfterSave)}
+                             >
+                                 <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${deleteAfterSave ? 'translate-x-6' : 'translate-x-0'}`}></div>
+                             </div>
+                         </div>
+                     </section>
+                 </div>
+                 <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+                     <button onClick={() => setShowDriveSettings(false)} className="px-4 py-2 text-gray-600 hover:text-gray-900 font-medium">Cancel</button>
+                     <button onClick={saveSettings} className="px-6 py-2 bg-black text-white rounded-lg font-medium hover:bg-gray-800 shadow-sm">Save Changes</button>
+                 </div>
+             </div>
+        </div>
+      )}
+
       {/* Collage Modal */}
       {showCollageModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl shadow-xl max-w-5xl w-full p-0 overflow-hidden flex flex-col md:flex-row max-h-[90vh]">
-                {/* Left: Controls */}
-                <div className="w-full md:w-1/3 p-6 border-r border-gray-100 bg-gray-50 overflow-y-auto">
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-xl font-bold flex items-center gap-2"><LayoutGrid className="text-purple-600"/> Collage</h2>
-                        <button onClick={() => setShowCollageModal(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-200"><X size={20}/></button>
-                    </div>
-                    
-                    <div className="space-y-6">
-                        {/* Size Controls */}
-                        <div>
-                             <label className="block text-sm font-semibold text-gray-700 mb-2">Output Size</label>
-                             <div className="grid grid-cols-2 gap-2 mb-3">
-                                 <button onClick={() => setCollageConfig({...collageConfig, width: 2160, height: 2160})} className={`text-xs py-2 rounded border ${collageConfig.width === 2160 && collageConfig.height === 2160 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Square (2K)</button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, width: 1080, height: 1920})} className={`text-xs py-2 rounded border ${collageConfig.width === 1080 && collageConfig.height === 1920 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Story (9:16)</button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, width: 1080, height: 1350})} className={`text-xs py-2 rounded border ${collageConfig.width === 1080 && collageConfig.height === 1350 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Portrait (4:5)</button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, width: 3840, height: 2160})} className={`text-xs py-2 rounded border ${collageConfig.width === 3840 && collageConfig.height === 2160 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Landscape (4K)</button>
-                             </div>
-                             <div className="flex gap-2">
-                                 <div><label className="text-xs text-gray-500">Width</label><input type="number" value={collageConfig.width} onChange={(e) => setCollageConfig({...collageConfig, width: parseInt(e.target.value) || 1000})} className="w-full px-3 py-2 border rounded-md text-sm" /></div>
-                                 <div><label className="text-xs text-gray-500">Height</label><input type="number" value={collageConfig.height} onChange={(e) => setCollageConfig({...collageConfig, height: parseInt(e.target.value) || 1000})} className="w-full px-3 py-2 border rounded-md text-sm" /></div>
-                             </div>
-                        </div>
-
-                        {/* Padding Control */}
-                        <div>
-                             <div className="flex justify-between mb-1"><label className="text-sm font-semibold text-gray-700">Padding</label><span className="text-xs text-gray-500">{collageConfig.padding}px</span></div>
-                             <input type="range" min="0" max="200" value={collageConfig.padding} onChange={(e) => setCollageConfig({...collageConfig, padding: parseInt(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"/>
-                        </div>
-
-                        {/* Color Control */}
-                         <div>
-                             <label className="text-sm font-semibold text-gray-700 mb-2 block">Background Color</label>
-                             <div className="flex gap-2">
-                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#ffffff'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#ffffff' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#fff'}}></button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#000000'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#000000' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#000'}}></button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#f3f4f6'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#f3f4f6' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#f3f4f6'}}></button>
-                                 <input type="color" value={collageConfig.color} onChange={(e) => setCollageConfig({...collageConfig, color: e.target.value})} className="w-8 h-8 p-0 border-0 rounded-full overflow-hidden cursor-pointer" />
-                             </div>
-                        </div>
-                    </div>
-
-                    <div className="mt-8 space-y-3">
-                        <button onClick={handleDownloadCollage} disabled={!collagePreviewUrl} className="w-full flex items-center justify-center gap-2 bg-black text-white py-3 rounded-xl font-medium hover:bg-gray-800 transition-colors">
-                            <Download size={18}/> Download Image
-                        </button>
-                        <button onClick={handleSaveCollageToDrive} disabled={!collagePreviewUrl || isUploading} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 text-gray-700 py-3 rounded-xl font-medium hover:bg-gray-50 transition-colors">
-                            {isUploading ? <Loader2 className="animate-spin" size={18}/> : <CloudUpload size={18}/>} Save to Drive
-                        </button>
-                    </div>
-                </div>
-
-                {/* Right: Preview */}
-                <div className="w-full md:w-2/3 bg-gray-200 flex items-center justify-center p-8 relative">
-                    <div className="absolute inset-0 pattern-grid opacity-10 pointer-events-none"></div>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => setShowCollageModal(false)}>
+            <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full flex overflow-hidden h-[85vh]" onClick={e => e.stopPropagation()}>
+                
+                {/* Left: Preview */}
+                <div className="w-2/3 bg-gray-100 p-8 flex items-center justify-center relative">
+                    <div className="pattern-grid absolute inset-0 opacity-[0.05]"></div>
                     {isGeneratingCollage ? (
-                        <div className="flex flex-col items-center gap-3 bg-white/80 p-6 rounded-xl backdrop-blur-sm shadow-lg">
-                            <Loader2 className="animate-spin text-purple-600" size={32}/>
-                            <span className="font-medium text-gray-600">Generating Preview...</span>
+                        <div className="flex flex-col items-center gap-3 text-gray-500">
+                            <Loader2 className="animate-spin" size={40} />
+                            <p>Stitching images...</p>
                         </div>
                     ) : collagePreviewUrl ? (
-                        <img src={collagePreviewUrl} className="max-w-full max-h-[70vh] shadow-2xl rounded-sm object-contain bg-white" alt="Collage Preview"/>
+                        <img src={collagePreviewUrl} alt="Collage Preview" className="max-w-full max-h-full shadow-xl rounded-sm object-contain border-4 border-white" />
                     ) : (
-                        <span className="text-gray-400">Preview not available</span>
+                        <p className="text-gray-400">Preview Unavailable</p>
                     )}
                 </div>
-            </div>
-        </div>
-      )}
-
-      {showDriveSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-xl max-w-6xl w-full p-6 animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Settings size={24} className="text-gray-500" />Settings</h2><button onClick={() => setShowDriveSettings(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors"><X size={20} /></button></div>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              {/* Left Column: Controls */}
-              <div className="lg:col-span-2 space-y-6">
-                <div className="space-y-3">
-                    <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Sparkles size={16} className="text-purple-600"/>Gemini AI Configuration</h3>
-                    <div className="space-y-4">
-                      <div><label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label><input type="password" value={geminiApiKey} onChange={(e) => setGeminiApiKey(e.target.value)} placeholder="AIza..." className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono" /></div>
-                      <div><label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">Gemini API Base URL</label><div className="relative"><Globe className="absolute left-3 top-2.5 text-gray-400" size={16} /><input type="text" value={geminiApiUrl} onChange={(e) => setGeminiApiUrl(e.target.value)} placeholder="https://..." className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono" /></div></div>
-                    </div>
-                </div>
                 
-                <div className="space-y-3 pt-2">
-                     <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Palette size={16} className="text-teal-600"/>Appearance Defaults</h3>
-                     <div className="space-y-4 bg-gray-50 p-4 rounded-lg border border-gray-100">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Default Label Style</label>
-                            <div className="flex gap-2">
-                                <button onClick={() => setDefaultLabelStyle('default')} className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${defaultLabelStyle === 'default' ? 'bg-white border-2 border-teal-500 text-teal-700 shadow-sm' : 'bg-gray-100 border border-transparent text-gray-500 hover:bg-gray-200'}`}>
-                                    <LinkIcon size={14}/> Default
-                                </button>
-                                <button onClick={() => setDefaultLabelStyle('pill')} className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${defaultLabelStyle === 'pill' ? 'bg-white border-2 border-teal-500 text-teal-700 shadow-sm' : 'bg-gray-100 border border-transparent text-gray-500 hover:bg-gray-200'}`}>
-                                    <Tag size={14}/> Pill
-                                </button>
-                                <button onClick={() => setDefaultLabelStyle('text')} className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${defaultLabelStyle === 'text' ? 'bg-white border-2 border-teal-500 text-teal-700 shadow-sm' : 'bg-gray-100 border border-transparent text-gray-500 hover:bg-gray-200'}`}>
-                                    <TypeIcon size={14}/> Text
-                                </button>
-                            </div>
-                        </div>
-                        <div className="space-y-3">
-                            <div className="flex flex-col gap-1">
-                                <div className="flex justify-between text-xs font-medium text-gray-600"><span>Default Title Size</span><span>{defaultTitleScale}</span></div>
-                                <input type="range" min="0" max="20" step="0.1" value={defaultTitleScale} onChange={(e) => setDefaultTitleScale(parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-600" />
-                            </div>
-                            <div className="flex flex-col gap-1">
-                                <div className="flex justify-between text-xs font-medium text-gray-600"><span>Default Card Size</span><span>{defaultCardScale}</span></div>
-                                <input type="range" min="0" max="20" step="0.1" value={defaultCardScale} onChange={(e) => setDefaultCardScale(parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-600" />
-                            </div>
-                            <div className="flex flex-col gap-1">
-                                <div className="flex justify-between text-xs font-medium text-gray-600"><span>Default Label Size</span><span>{defaultLabelScale}</span></div>
-                                <input type="range" min="0" max="20" step="0.1" value={defaultLabelScale} onChange={(e) => setDefaultLabelScale(parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-600" />
-                            </div>
-                        </div>
-                     </div>
-                </div>
-
-                <div className="space-y-3 pt-2">
-                    <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><LayoutTemplate size={16} className="text-indigo-600"/>Default Layout Positions</h3>
-                    <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-lg border border-gray-100">
-                        <div className="space-y-2">
-                             <span className="text-xs font-bold text-gray-500 uppercase">Meal Title</span>
-                             <div>
-                                 <div className="flex justify-between text-xs text-gray-600 mb-1"><span>X Position</span><span>{defaultTitlePos.x}%</span></div>
-                                 <input type="range" min="0" max="100" value={defaultTitlePos.x} onChange={(e) => setDefaultTitlePos({...defaultTitlePos, x: Number(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
-                             </div>
-                             <div>
-                                 <div className="flex justify-between text-xs text-gray-600 mb-1"><span>Y Position</span><span>{defaultTitlePos.y}%</span></div>
-                                 <input type="range" min="0" max="100" value={defaultTitlePos.y} onChange={(e) => setDefaultTitlePos({...defaultTitlePos, y: Number(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
-                             </div>
-                        </div>
-                        <div className="space-y-2">
-                             <span className="text-xs font-bold text-gray-500 uppercase">Nutrition Card</span>
-                             <div>
-                                 <div className="flex justify-between text-xs text-gray-600 mb-1"><span>X Position</span><span>{defaultCardPos.x}%</span></div>
-                                 <input type="range" min="0" max="100" value={defaultCardPos.x} onChange={(e) => setDefaultCardPos({...defaultCardPos, x: Number(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
-                             </div>
-                             <div>
-                                 <div className="flex justify-between text-xs text-gray-600 mb-1"><span>Y Position</span><span>{defaultCardPos.y}%</span></div>
-                                 <input type="range" min="0" max="100" value={defaultCardPos.y} onChange={(e) => setDefaultCardPos({...defaultCardPos, y: Number(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
-                             </div>
-                        </div>
+                {/* Right: Controls */}
+                <div className="w-1/3 bg-white border-l border-gray-200 flex flex-col">
+                    <div className="p-6 border-b border-gray-100">
+                        <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><LayoutGrid className="text-purple-600" /> Collage Creator</h2>
                     </div>
-                </div>
-
-                <div className="space-y-3 pt-2">
-                     <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Cloud size={16} className="text-blue-600"/>Google Drive Integration</h3>
-                     <div className="flex items-center justify-between p-3 bg-orange-50 border border-orange-100 rounded-lg">
-                        <div className="flex items-center gap-2 text-orange-800 text-xs font-medium"><Trash size={14} /> <span>Move original to Trash after saving</span></div>
-                        <input type="checkbox" checked={deleteAfterSave} onChange={(e) => setDeleteAfterSave(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500" />
-                     </div>
-                    <div><label className="block text-sm font-medium text-gray-700 mb-1">OAuth 2.0 Client ID</label><input type="text" value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono" /></div>
-                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
-                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Authorized Origin</label>
-                        <div className="flex gap-2"><div className="flex-1 bg-white border border-gray-200 px-3 py-2 rounded text-sm font-mono truncate text-gray-600">{window.location.origin}</div><button onClick={copyOrigin} className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 rounded flex items-center justify-center transition-colors">{copied ? <Check size={16} className="text-green-500"/> : <Copy size={16}/>}</button></div>
-                    </div>
-                    <div><label className="block text-sm font-medium text-gray-700 mb-1">Google Picker API Key</label><input type="password" value={googleApiKey} onChange={(e) => setGoogleApiKey(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono" /></div>
                     
-                    <div className="flex justify-end pt-2">
-                        <button onClick={handleResetAuth} className="text-red-500 text-xs font-medium hover:text-red-700 flex items-center gap-1 hover:bg-red-50 px-2 py-1 rounded transition-colors" title="Force re-login next time"><RotateCcw size={12}/> Reset Access</button>
+                    <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                        <div>
+                             <label className="text-xs font-semibold text-gray-500 uppercase block mb-3">Layout</label>
+                             <div className="space-y-4">
+                                 <div>
+                                     <div className="flex justify-between text-sm mb-1"><span>Padding</span><span className="text-gray-500">{collageConfig.padding}px</span></div>
+                                     <input type="range" min="0" max="100" value={collageConfig.padding} onChange={(e) => setCollageConfig({...collageConfig, padding: parseInt(e.target.value)})} className="w-full accent-purple-600" />
+                                 </div>
+                                 <div>
+                                     <div className="flex justify-between text-sm mb-1"><span>Background</span><span className="uppercase text-gray-500">{collageConfig.color}</span></div>
+                                     <div className="flex gap-2">
+                                         {['#ffffff', '#000000', '#f3f4f6', '#fee2e2', '#dbeafe'].map(c => (
+                                             <button key={c} onClick={() => setCollageConfig({...collageConfig, color: c})} className={`w-8 h-8 rounded-full border border-gray-200 shadow-sm ${collageConfig.color === c ? 'ring-2 ring-purple-500 ring-offset-2' : ''}`} style={{backgroundColor: c}}></button>
+                                         ))}
+                                         <input type="color" value={collageConfig.color} onChange={(e) => setCollageConfig({...collageConfig, color: e.target.value})} className="w-8 h-8 p-0 border-0 rounded-full overflow-hidden cursor-pointer"/>
+                                     </div>
+                                 </div>
+                             </div>
+                        </div>
+                        
+                        <div>
+                            <div className="flex items-center justify-between mb-3">
+                                <label className="text-xs font-semibold text-gray-500 uppercase">Center Label</label>
+                                <button 
+                                    onClick={handleIdentifyCollage} 
+                                    disabled={!collagePreviewUrl || isAnalyzingCollage}
+                                    className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-md font-medium hover:bg-purple-200 flex items-center gap-1"
+                                >
+                                    {isAnalyzingCollage ? <Loader2 size={12} className="animate-spin"/> : <Sparkles size={12}/>} 
+                                    Auto-Identify
+                                </button>
+                            </div>
+                            <div className="space-y-3">
+                                <input 
+                                    type="text" 
+                                    placeholder="Dish Name (e.g. Sushi Platter)" 
+                                    value={collageLabel.name} 
+                                    onChange={(e) => setCollageLabel({...collageLabel, name: e.target.value})} 
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none"
+                                />
+                                <input 
+                                    type="text" 
+                                    placeholder="Calories (e.g. 500 kcal)" 
+                                    value={collageLabel.calories} 
+                                    onChange={(e) => setCollageLabel({...collageLabel, calories: e.target.value})} 
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none"
+                                />
+                            </div>
+                            <div className="space-y-3 mt-3 pt-3 border-t border-gray-100">
+                                <div>
+                                    <div className="flex justify-between text-xs font-medium text-gray-600 mb-1">
+                                        <span>Size</span><span>{collageLabelScale.toFixed(1)}</span>
+                                    </div>
+                                    <input type="range" min="0.5" max="5" step="0.1" value={collageLabelScale} onChange={(e) => setCollageLabelScale(parseFloat(e.target.value))} className="w-full accent-purple-600" />
+                                </div>
+                                <div>
+                                    <div className="flex justify-between text-xs font-medium text-gray-600 mb-1">
+                                        <span>Vertical Position</span><span>{collageLabelY}%</span>
+                                    </div>
+                                    <input type="range" min="0" max="100" step="1" value={collageLabelY} onChange={(e) => setCollageLabelY(parseFloat(e.target.value))} className="w-full accent-purple-600" />
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                    
+                    <div className="p-6 border-t border-gray-100 bg-gray-50 space-y-3">
+                        <button onClick={handleSaveCollageToDrive} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
+                            <CloudUpload size={18} /> Save to Drive
+                        </button>
+                        <button onClick={handleDownloadCollage} className="w-full py-3 bg-white border border-gray-300 text-gray-700 rounded-xl font-bold hover:bg-gray-50 transition-colors flex items-center justify-center gap-2">
+                            <Download size={18} /> Download
+                        </button>
                     </div>
                 </div>
-              </div>
-
-              {/* Right Column: Live Preview */}
-              <div className="lg:col-span-1">
-                <div className="sticky top-0 space-y-3">
-                   <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Smartphone size={16} className="text-gray-600"/>Live Preview</h3>
-                   <div className="bg-gray-900 rounded-[2.5rem] p-3 shadow-2xl border-4 border-gray-800 mx-auto max-w-[320px]">
-                      <div className="bg-white rounded-[2rem] overflow-hidden relative w-full aspect-[9/16] bg-gray-50">
-                         <canvas ref={settingsCanvasRef} className="w-full h-full object-contain"/>
-                      </div>
-                   </div>
-                   <p className="text-xs text-center text-gray-500">Previewing with 9:16 layout</p>
-                </div>
-              </div>
             </div>
-
-            <div className="mt-8 flex justify-end"><button onClick={saveSettings} className="bg-black text-white px-5 py-2 rounded-lg hover:bg-gray-800 transition-colors font-medium">Save & Close</button></div>
-          </div>
         </div>
       )}
       
+      {/* Help Modal */}
       {showHelp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-8 animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto custom-scrollbar">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                <BookOpen size={24} className="text-blue-600" /> AI Cal 使用指南
-              </h2>
-              <button onClick={() => setShowHelp(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors">
-                <X size={24} />
-              </button>
-            </div>
-            
-            <div className="prose prose-sm prose-gray max-w-none space-y-6 text-gray-600">
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">1. 登录与访问</h3>
-                <p>首次访问请输入默认安全密码：<code className="bg-gray-100 px-1.5 py-0.5 rounded text-red-500 font-mono">aical999</code></p>
-              </section>
-
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">2. 初始配置 (Settings)</h3>
-                <ul className="list-disc pl-5 space-y-1">
-                  <li><strong>Gemini AI 配置</strong>: 必需。输入 Google Gemini API Key (以 AIza 开头)。</li>
-                  <li><strong>Google Drive 集成</strong>: 如需从 Drive 导入或保存，请输入 Client ID 和 Picker API Key。</li>
-                  <li><strong>外观默认值</strong>: 可预设生成卡片的默认大小和标签样式，减少重复调整。</li>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => setShowHelp(false)}>
+            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                <h3 className="text-xl font-bold flex items-center gap-2"><BookOpen size={24}/> Quick Guide</h3>
+                <ul className="space-y-2 text-sm text-gray-600 list-disc pl-4">
+                    <li><strong>Drag & Drop</strong> images to the queue.</li>
+                    <li>Click <strong>Process Batch</strong> to analyze with Gemini AI.</li>
+                    <li><strong>Click</strong> a processed image to view and edit.</li>
+                    <li><strong>Drag</strong> elements (Title, Card, Labels) on the canvas to reposition.</li>
+                    <li><strong>Double Click</strong> text to edit it manually.</li>
+                    <li><strong>Select 4 images</strong> to enable the Collage Creator.</li>
+                    <li>Use <strong>Settings</strong> to configure Google Drive & Appearance defaults.</li>
+                    <li>The <strong>Delete Original</strong> option in settings will move source files to trash after saving to Drive (Requires full Drive permissions).</li>
                 </ul>
-              </section>
-
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">3. 导入图片</h3>
-                <p>支持 <strong>本地上传</strong> (拖拽或点击虚线框) 和 <strong>Google Drive 导入</strong> (支持文件夹浏览和多选)。</p>
-              </section>
-
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">4. 批量处理</h3>
-                <p>点击顶部 <strong>Process Batch</strong> 按钮。AI 将自动识别食物、检测已有文字并生成营养数据。非食物图片会被自动过滤。</p>
-              </section>
-
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">5. 编辑与排版</h3>
-                <ul className="list-disc pl-5 space-y-1">
-                  <li><strong>拖拽</strong>: 画布上的标题、卡片、标签均可自由拖拽。</li>
-                  <li><strong>编辑文字</strong>: 双击标签或标题可修改内容。</li>
-                  <li><strong>调整样式</strong>: 右侧控制面板可调整大小。双击标签或在右侧列表可切换标签样式 (Pill/Text/Default)。</li>
-                </ul>
-              </section>
-
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">6. 导出与保存</h3>
-                <ul className="list-disc pl-5 space-y-1">
-                  <li><strong>Save to Drive</strong>: 将当前图片保存回 Google Drive。若开启 "Move original to Trash" 且授权完整，会自动删除原图。</li>
-                  <li><strong>批量保存</strong>: 在左侧列表勾选多张图片，使用队列上方的批量保存功能。</li>
-                </ul>
-              </section>
-              
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">7. TikTok 比例裁剪</h3>
-                <p>在左侧队列上方开启 "Crop to TikTok (9:16)" 开关。开启后，处理图片时会自动将其裁剪为适合 TikTok 的 9:16 竖屏格式。</p>
-              </section>
-
-               <section className="bg-orange-50 p-4 rounded-lg border border-orange-100">
-                <h3 className="text-sm font-bold text-orange-800 mb-2 flex items-center gap-2"><AlertTriangle size={16}/> 常见问题: Drive 权限</h3>
-                <p className="text-sm text-orange-700">若遇到 "Could not delete original file"，请进入设置点击 <span className="font-semibold">Reset Access</span>，并在重新登录时勾选 <span className="font-semibold">所有权限框</span>。</p>
-              </section>
+                <button onClick={() => setShowHelp(false)} className="w-full py-2 bg-black text-white rounded-lg font-medium mt-4">Got it</button>
             </div>
-
-            <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
-                <button onClick={() => setShowHelp(false)} className="bg-gray-100 text-gray-700 px-6 py-2.5 rounded-xl hover:bg-gray-200 transition-colors font-medium">关闭</button>
-            </div>
-          </div>
         </div>
       )}
-      <style>{`.pattern-grid { background-image: radial-gradient(#000 1px, transparent 1px); background-size: 20px 20px; }`}</style>
     </div>
   );
 }
-
-export default App;

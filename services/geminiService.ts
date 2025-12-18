@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { FoodAnalysis } from "../types";
+import { FoodAnalysis, CollageLabel } from "../types";
 
 // The analysis schema for the model's response in JSON format.
 const analysisSchema = {
@@ -40,19 +40,20 @@ const analysisSchema = {
   required: ["isFood", "hasExistingText", "items", "nutrition", "mealType", "summary"],
 };
 
+const collageSchema = {
+  type: Type.OBJECT,
+  description: "The single main food item depicted in the collage.",
+  properties: {
+    name: { type: Type.STRING, description: "The common name of the food item visible in all images (e.g. 'Ginger Tea')." },
+    calories: { type: Type.STRING, description: "Estimated calories (e.g. '50 kcal')." },
+  },
+  required: ["name", "calories"]
+};
+
 // Helper function to handle exponential backoff for API rate limits.
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Analyzes a food image using the Gemini API.
-export async function analyzeFoodImage(
-  base64Image: string, 
-  mimeType: string, 
-  apiKey?: string, 
-  baseUrl?: string
-): Promise<FoodAnalysis> {
-  const maxRetries = 3;
-  let attempt = 0;
-
+function getClient(apiKey?: string, baseUrl?: string) {
   // Prioritize provided key (for third-party proxies) or fallback to system environment variable.
   const effectiveKey = apiKey || process.env.API_KEY;
   if (!effectiveKey) {
@@ -75,7 +76,19 @@ export async function analyzeFoodImage(
     'Authorization': `Bearer ${effectiveKey}`
   };
 
-  const ai = new GoogleGenAI(clientConfig);
+  return new GoogleGenAI(clientConfig);
+}
+
+// Analyzes a food image using the Gemini API.
+export async function analyzeFoodImage(
+  base64Image: string, 
+  mimeType: string, 
+  apiKey?: string, 
+  baseUrl?: string
+): Promise<FoodAnalysis> {
+  const maxRetries = 3;
+  let attempt = 0;
+  const ai = getClient(apiKey, baseUrl);
 
   while (attempt <= maxRetries) {
     try {
@@ -139,4 +152,36 @@ export async function analyzeFoodImage(
   }
   
   throw new Error("Failed to analyze image after multiple retries due to server overload.");
+}
+
+export async function analyzeCollage(
+  base64Image: string, 
+  apiKey?: string, 
+  baseUrl?: string
+): Promise<CollageLabel> {
+  const ai = getClient(apiKey, baseUrl);
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: {
+        parts: [
+          { inlineData: { mimeType: "image/jpeg", data: base64Image } },
+          { text: "Analyze this 2x2 collage. All 4 images depict the same food item or theme. Identify the SINGLE main food name (max 3 words) and estimated calories." }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: collageSchema
+      }
+    });
+
+    if (!response.text) throw new Error("No response");
+    const data = JSON.parse(response.text) as CollageLabel;
+    return data;
+
+  } catch (e) {
+    console.error("Collage Analysis Error", e);
+    return { name: "", calories: "" };
+  }
 }
