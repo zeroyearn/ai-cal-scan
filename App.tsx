@@ -86,8 +86,8 @@ function App() {
   };
 
   // Uses PATCH to trash the file instead of DELETE. 
-  // Trashing is safer and less likely to fail due to permanent delete permission scopes.
-  const deleteFromDrive = async (fileId: string, token: string) => {
+  // Returns true on success, false on failure.
+  const deleteFromDrive = async (fileId: string, token: string): Promise<boolean> => {
     try {
       const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
         method: 'PATCH',
@@ -99,14 +99,16 @@ function App() {
       });
       
       if (!response.ok) {
-        const err = await response.json();
+        const err = await response.json().catch(() => ({}));
         console.warn(`Failed to trash file ${fileId}:`, err);
-        // Fallback: If patch fails (rare), try delete if user really wants it gone, but usually permission issues affect both.
+        return false;
       } else {
         console.log(`Successfully moved file ${fileId} to trash.`);
+        return true;
       }
     } catch (e) {
       console.error(`Error trashing file ${fileId}:`, e);
+      return false;
     }
   };
 
@@ -272,12 +274,20 @@ function App() {
             });
             if (!response.ok) throw new Error('Upload failed');
             
+            let deleteSuccess = false;
             if (deleteAfterSave && selectedImage.driveFileId) {
-                await deleteFromDrive(selectedImage.driveFileId, token);
-                setImages(prev => prev.map(img => img.id === selectedImage.id ? { ...img, driveFileId: undefined } : img));
+                deleteSuccess = await deleteFromDrive(selectedImage.driveFileId, token);
+                if (deleteSuccess) {
+                  setImages(prev => prev.map(img => img.id === selectedImage.id ? { ...img, driveFileId: undefined } : img));
+                }
             }
 
-            alert(`✅ Saved to Google Drive!\nFile: ${fileName}${deleteAfterSave && selectedImage.driveFileId ? '\nOriginal file moved to Trash.' : ''}`);
+            let msg = `✅ Saved to Google Drive!\nFile: ${fileName}`;
+            if (deleteAfterSave && selectedImage.driveFileId) {
+                msg += deleteSuccess ? '\n🗑️ Original file moved to Trash.' : '\n⚠️ Could not delete original file (check permissions).';
+            }
+            alert(msg);
+
         } catch (error: any) { alert("Failed: " + error.message); } 
         finally { setIsUploading(false); }
     };
@@ -294,6 +304,7 @@ function App() {
         setIsUploading(true);
         let successCount = 0;
         let deleteCount = 0;
+        let deleteFailures = 0;
         const date = new Date().toISOString().split('T')[0];
         const safeTag = exportTag.trim().replace(/[\/\\:*?"<>|]/g, '') || "Style";
 
@@ -317,15 +328,24 @@ function App() {
                 if (response.ok) {
                     successCount++;
                     if (deleteAfterSave && img.driveFileId) {
-                        await deleteFromDrive(img.driveFileId, token);
-                        deleteCount++;
-                        // Update state to remove the driveFileId icon locally
-                        setImages(prev => prev.map(p => p.id === img.id ? { ...p, driveFileId: undefined } : p));
+                        const deleted = await deleteFromDrive(img.driveFileId, token);
+                        if (deleted) {
+                            deleteCount++;
+                            // Update state to remove the driveFileId icon locally
+                            setImages(prev => prev.map(p => p.id === img.id ? { ...p, driveFileId: undefined } : p));
+                        } else {
+                            deleteFailures++;
+                        }
                     }
                 }
             } catch (err) { console.error(err); }
         }
-        alert(`Batch Complete!\n✅ Success: ${successCount}\n🗑️ Moved to Trash: ${deleteCount}`);
+        
+        let msg = `Batch Complete!\n✅ Success: ${successCount}`;
+        if (deleteCount > 0) msg += `\n🗑️ Moved to Trash: ${deleteCount}`;
+        if (deleteFailures > 0) msg += `\n⚠️ Failed to delete: ${deleteFailures} (Check Permissions)`;
+        
+        alert(msg);
         setIsUploading(false);
         setBatchSelection(new Set());
     };

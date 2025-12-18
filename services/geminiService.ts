@@ -6,7 +6,7 @@ const analysisSchema = {
   type: Type.OBJECT,
   properties: {
     isFood: { type: Type.BOOLEAN, description: "True if the main subject is food. False if it is a menu, a person, a wrapper, or blurry." },
-    hasExistingText: { type: Type.BOOLEAN, description: "True if the image already contains significant visible text overlays, watermarks, or nutrition labels." },
+    hasExistingText: { type: Type.BOOLEAN, description: "True if the image contains visible text describing the food, nutrition labels, or branding overlays." },
     mealType: { type: Type.STRING, description: "E.g., Breakfast, Lunch, Dinner, Snack." },
     summary: { type: Type.STRING, description: "A short 5-8 word summary of the dish." },
     items: {
