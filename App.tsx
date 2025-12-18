@@ -116,20 +116,22 @@ function App() {
   const handleResetAuth = () => {
       const google = (window as any).google;
       if (accessToken && google) {
-          // 1. Revoke the token on Google's side
-          google.accounts.oauth2.revoke(accessToken, () => {
-              console.log('Access token revoked');
-          });
+          try {
+             // 1. Revoke the token on Google's side
+             google.accounts.oauth2.revoke(accessToken, () => {
+                 console.log('Access token revoked');
+             });
+          } catch(e) { console.error("Revoke error", e); }
       }
       
       // 2. Clear local state
       setAccessToken(null);
       tokenClientRef.current = null;
       
-      // 3. Set flag to force consent screen next time
+      // 3. Set flag to force consent screen AND account selection next time
       setForceAuthPrompt(true);
       
-      alert("Authorization reset. Next time you connect, you MUST check the 'See, edit, create, and delete' box to enable file deletion.");
+      alert("Authorization reset complete. \n\nNext time you Import or Save, you will be asked to sign in.\n\nIMPORTANT: Make sure to check ALL permission boxes (See, edit, create, delete) to enable the 'Delete Original' feature.");
   };
 
   const copyOrigin = () => {
@@ -149,7 +151,7 @@ function App() {
     }
   };
 
-  const deleteFromDrive = async (fileId: string, token: string): Promise<boolean> => {
+  const deleteFromDrive = async (fileId: string, token: string): Promise<{success: boolean, error?: string}> => {
     try {
       const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
         method: 'PATCH',
@@ -161,14 +163,20 @@ function App() {
       });
       
       if (!response.ok) {
-        console.error("Delete failed with status:", response.status, response.statusText);
-        return false;
+        const errText = await response.text();
+        console.error("Delete failed:", response.status, errText);
+        let niceError = `Error ${response.status}: `;
+        if (response.status === 403) niceError += "Insufficient permissions (Scope missing or not file owner).";
+        else if (response.status === 404) niceError += "File not found (already deleted?).";
+        else niceError += "Check console for details.";
+        
+        return { success: false, error: niceError };
       } else {
-        return true;
+        return { success: true };
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(`Error trashing file ${fileId}:`, e);
-      return false;
+      return { success: false, error: e.message };
     }
   };
 
@@ -184,7 +192,9 @@ function App() {
             setIsDriveLoading(false);
             return;
         }
-        if (!tokenClientRef.current) {
+        
+        // Always create a new token client if we are forcing prompt, to ensure config applies
+        if (!tokenClientRef.current || forceAuthPrompt) {
             tokenClientRef.current = google.accounts.oauth2.initTokenClient({
                 client_id: googleClientId,
                 scope: GOOGLE_SCOPES,
@@ -201,7 +211,7 @@ function App() {
                     );
                     
                     if (!hasGrantedAllScopes) {
-                         alert("⚠️ Warning: You did not grant all permissions. The app cannot delete original files without full access. Please Reset Access and try again.");
+                         alert("⚠️ Warning: Not all permissions were granted. The app will be able to SAVE, but NOT DELETE files. Please Reset Access if you need deletion.");
                     }
 
                     setAccessToken(resp.access_token);
@@ -216,8 +226,11 @@ function App() {
         }
         onAuthSuccessRef.current = callback;
         
-        // 4. Use 'consent' prompt if forced (e.g. after reset), otherwise '' (auto)
-        tokenClientRef.current.requestAccessToken({ prompt: forceAuthPrompt ? 'consent' : '' });
+        // Use 'consent select_account' to force the full flow if requested
+        // otherwise default to auto
+        const promptSetting = forceAuthPrompt ? 'consent select_account' : '';
+        tokenClientRef.current.requestAccessToken({ prompt: promptSetting });
+
     } catch (e: any) {
         setIsDriveLoading(false);
         setIsUploading(false);
@@ -261,9 +274,14 @@ function App() {
 
         const view = new google.picker.View(google.picker.ViewId.DOCS_IMAGES);
         view.setMimeTypes("image/png,image/jpeg,image/jpg");
+        
+        // Extract Project Number from Client ID (before the first dash) for setAppId
+        // This is crucial for correct picker permissions
+        const appId = googleClientId.split('-')[0];
+
         const picker = new google.picker.PickerBuilder()
           .setDeveloperKey(googleApiKey)
-          .setAppId(googleClientId)
+          .setAppId(appId) 
           .setOAuthToken(token)
           .addView(view)
           .addView(new google.picker.DocsUploadView())
@@ -285,6 +303,7 @@ function App() {
     }
   }, [googleApiKey, googleClientId]);
 
+  // (createFolderPicker remains largely the same but ensure appId is consistent if we were editing it, but it uses defaults mostly)
   const createFolderPicker = useCallback((token: string, onFolderSelect: (folderId: string) => void) => {
     const google = (window as any).google;
     const gapi = (window as any).gapi;
@@ -294,9 +313,12 @@ function App() {
             .setSelectFolderEnabled(true)
             .setIncludeFolders(true)
             .setMimeTypes('application/vnd.google-apps.folder');
+        
+        const appId = googleClientId.split('-')[0];
+
         const picker = new google.picker.PickerBuilder()
             .setDeveloperKey(googleApiKey)
-            .setAppId(googleClientId)
+            .setAppId(appId)
             .setOAuthToken(token)
             .addView(view)
             .setCallback((data: any) => {
@@ -348,8 +370,13 @@ function App() {
             if (!response.ok) throw new Error('Upload failed');
             
             let deleteSuccess = false;
+            let deleteErrorMsg = "";
+            
             if (deleteAfterSave && selectedImage.driveFileId) {
-                deleteSuccess = await deleteFromDrive(selectedImage.driveFileId, token);
+                const result = await deleteFromDrive(selectedImage.driveFileId, token);
+                deleteSuccess = result.success;
+                deleteErrorMsg = result.error || "";
+                
                 if (deleteSuccess) {
                   setImages(prev => prev.map(img => img.id === selectedImage.id ? { ...img, driveFileId: undefined } : img));
                 }
@@ -357,7 +384,9 @@ function App() {
 
             let msg = `✅ Saved to Google Drive!\nFile: ${fileName}`;
             if (deleteAfterSave && selectedImage.driveFileId) {
-                msg += deleteSuccess ? '\n🗑️ Original file moved to Trash.' : '\n⚠️ Could not delete original file (check permissions).';
+                msg += deleteSuccess 
+                  ? '\n🗑️ Original file moved to Trash.' 
+                  : `\n⚠️ Could not delete original file.\nReason: ${deleteErrorMsg}`;
             }
             alert(msg);
 
@@ -401,8 +430,8 @@ function App() {
                 if (response.ok) {
                     successCount++;
                     if (deleteAfterSave && img.driveFileId) {
-                        const deleted = await deleteFromDrive(img.driveFileId, token);
-                        if (deleted) {
+                        const result = await deleteFromDrive(img.driveFileId, token);
+                        if (result.success) {
                             deleteCount++;
                             // Update state to remove the driveFileId icon locally
                             setImages(prev => prev.map(p => p.id === img.id ? { ...p, driveFileId: undefined } : p));
