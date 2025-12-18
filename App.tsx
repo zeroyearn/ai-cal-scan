@@ -66,6 +66,10 @@ function App() {
   const [googleApiKey, setGoogleApiKey] = useState(DEFAULT_API_KEY);
   const [copied, setCopied] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  
+  // State to track if we need to force the consent screen (e.g. after a reset)
+  const [forceAuthPrompt, setForceAuthPrompt] = useState(false);
+  
   const tokenClientRef = useRef<any>(null);
   const onAuthSuccessRef = useRef<((token: string) => void) | null>(null);
   
@@ -106,16 +110,26 @@ function App() {
     localStorage.setItem('aical_default_card_scale', String(defaultCardScale));
     localStorage.setItem('aical_default_label_scale', String(defaultLabelScale));
 
-    // Do NOT clear access token automatically on save, unless client ID changed, 
-    // to avoid forcing re-login unnecessarily. 
-    // Use the explicit Reset button for that.
     setShowDriveSettings(false);
   };
   
   const handleResetAuth = () => {
+      const google = (window as any).google;
+      if (accessToken && google) {
+          // 1. Revoke the token on Google's side
+          google.accounts.oauth2.revoke(accessToken, () => {
+              console.log('Access token revoked');
+          });
+      }
+      
+      // 2. Clear local state
       setAccessToken(null);
       tokenClientRef.current = null;
-      alert("Authorization reset. You will be prompted to log in again next time you use Google Drive features.");
+      
+      // 3. Set flag to force consent screen next time
+      setForceAuthPrompt(true);
+      
+      alert("Authorization reset. Next time you connect, you MUST check the 'See, edit, create, and delete' box to enable file deletion.");
   };
 
   const copyOrigin = () => {
@@ -148,7 +162,6 @@ function App() {
       
       if (!response.ok) {
         console.error("Delete failed with status:", response.status, response.statusText);
-        // If 403, it's a permission issue.
         return false;
       } else {
         return true;
@@ -188,10 +201,12 @@ function App() {
                     );
                     
                     if (!hasGrantedAllScopes) {
-                         alert("Warning: Not all permissions were granted. 'Delete original' feature may fail. Please reset auth and grant full access.");
+                         alert("⚠️ Warning: You did not grant all permissions. The app cannot delete original files without full access. Please Reset Access and try again.");
                     }
 
                     setAccessToken(resp.access_token);
+                    setForceAuthPrompt(false); // Reset prompt flag on success
+                    
                     if (onAuthSuccessRef.current) {
                         onAuthSuccessRef.current(resp.access_token);
                         onAuthSuccessRef.current = null;
@@ -200,7 +215,9 @@ function App() {
             });
         }
         onAuthSuccessRef.current = callback;
-        tokenClientRef.current.requestAccessToken({ prompt: '' });
+        
+        // 4. Use 'consent' prompt if forced (e.g. after reset), otherwise '' (auto)
+        tokenClientRef.current.requestAccessToken({ prompt: forceAuthPrompt ? 'consent' : '' });
     } catch (e: any) {
         setIsDriveLoading(false);
         setIsUploading(false);
