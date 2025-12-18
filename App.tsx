@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState } from './types';
 import { analyzeFoodImage } from './services/geminiService';
 import { resizeImage, getInitialLayout, generateCardSprite, generateLabelSprite, generateTitleSprite, renderFinalImage } from './utils/canvasUtils';
@@ -85,19 +85,28 @@ function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Uses PATCH to trash the file instead of DELETE. 
+  // Trashing is safer and less likely to fail due to permanent delete permission scopes.
   const deleteFromDrive = async (fileId: string, token: string) => {
     try {
-      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
+      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+        method: 'PATCH',
+        headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ trashed: true })
       });
+      
       if (!response.ok) {
-        console.warn(`Failed to delete original file ${fileId}: ${response.statusText}`);
+        const err = await response.json();
+        console.warn(`Failed to trash file ${fileId}:`, err);
+        // Fallback: If patch fails (rare), try delete if user really wants it gone, but usually permission issues affect both.
       } else {
-        console.log(`Successfully deleted original file ${fileId} from Drive.`);
+        console.log(`Successfully moved file ${fileId} to trash.`);
       }
     } catch (e) {
-      console.error(`Error deleting file ${fileId}:`, e);
+      console.error(`Error trashing file ${fileId}:`, e);
     }
   };
 
@@ -268,7 +277,7 @@ function App() {
                 setImages(prev => prev.map(img => img.id === selectedImage.id ? { ...img, driveFileId: undefined } : img));
             }
 
-            alert(`✅ Saved to Google Drive!\nFile: ${fileName}${deleteAfterSave && selectedImage.driveFileId ? '\nOriginal file deleted.' : ''}`);
+            alert(`✅ Saved to Google Drive!\nFile: ${fileName}${deleteAfterSave && selectedImage.driveFileId ? '\nOriginal file moved to Trash.' : ''}`);
         } catch (error: any) { alert("Failed: " + error.message); } 
         finally { setIsUploading(false); }
     };
@@ -310,11 +319,13 @@ function App() {
                     if (deleteAfterSave && img.driveFileId) {
                         await deleteFromDrive(img.driveFileId, token);
                         deleteCount++;
+                        // Update state to remove the driveFileId icon locally
+                        setImages(prev => prev.map(p => p.id === img.id ? { ...p, driveFileId: undefined } : p));
                     }
                 }
             } catch (err) { console.error(err); }
         }
-        alert(`Batch Complete!\n✅ Success: ${successCount}\n🗑️ Deleted Original: ${deleteCount}`);
+        alert(`Batch Complete!\n✅ Success: ${successCount}\n🗑️ Moved to Trash: ${deleteCount}`);
         setIsUploading(false);
         setBatchSelection(new Set());
     };
@@ -584,7 +595,8 @@ function App() {
                   <img src={img.previewUrl} alt="preview" className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
                     {img.status === 'analyzing' && <Loader2 className="animate-spin text-white" size={16} />}
-                    {img.status === 'complete' && <CheckCircle2 className="text-green-400 bg-white rounded-full" size={16} />}
+                    {img.status === 'complete' && !img.analysis?.hasExistingText && <CheckCircle2 className="text-green-400 bg-white rounded-full" size={16} />}
+                    {img.status === 'complete' && img.analysis?.hasExistingText && <TypeIcon className="text-yellow-500 bg-white rounded-full p-0.5" size={16} />}
                     {img.status === 'error' && <AlertCircle className="text-red-400 bg-white rounded-full" size={16} />}
                     {img.status === 'not-food' && <X className="text-orange-400 bg-white rounded-full" size={16} />}
                   </div>
@@ -592,7 +604,10 @@ function App() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{img.file.name}</p>
-                  <p className={`text-xs mt-0.5 capitalize ${img.status === 'error' ? 'text-red-500 font-medium' : 'text-gray-500'}`}>{img.status.replace('-', ' ')}</p>
+                  <p className={`text-xs mt-0.5 capitalize flex items-center gap-1 ${img.status === 'error' ? 'text-red-500 font-medium' : 'text-gray-500'}`}>
+                    {img.status.replace('-', ' ')}
+                    {img.status === 'complete' && img.analysis?.hasExistingText && <span className="text-yellow-600 font-medium flex items-center gap-0.5"><AlertTriangle size={10}/> Text Found</span>}
+                  </p>
                 </div>
                 <button onClick={(e) => removeImage(e, img.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"><X size={16} /></button>
               </div>
@@ -622,6 +637,16 @@ function App() {
                     {selectedImage.status === 'analyzing' && <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 backdrop-blur-sm z-50"><Loader2 className="animate-spin text-white mb-2" size={48} /><p className="text-white font-medium">Analysing food...</p></div>}
                   </div>
                 </div>
+
+                {selectedImage.status === 'complete' && selectedImage.analysis?.hasExistingText && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-start gap-3 text-yellow-800">
+                        <AlertTriangle className="shrink-0 mt-0.5" size={20} />
+                        <div>
+                            <p className="font-semibold text-sm">Existing Text Detected</p>
+                            <p className="text-xs mt-1 text-yellow-700">The AI detected existing nutrition labels or heavy text overlays on this image. The automated layout might overlap with original content.</p>
+                        </div>
+                    </div>
+                )}
 
                 {selectedImage.status === 'complete' && selectedImage.layout && (
                   <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
@@ -676,7 +701,8 @@ function App() {
             )}
           </div>
         </div>
-      </main>
+
+        <div className="absolute top-4 right-4 z-50"></div>
 
       {showDriveSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -693,7 +719,7 @@ function App() {
                 <div className="space-y-3 pt-2">
                      <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Cloud size={16} className="text-blue-600"/>Google Drive Integration</h3>
                      <div className="flex items-center justify-between p-3 bg-orange-50 border border-orange-100 rounded-lg">
-                        <div className="flex items-center gap-2 text-orange-800 text-xs font-medium"><Trash size={14} /> <span>Delete original from Drive after saving</span></div>
+                        <div className="flex items-center gap-2 text-orange-800 text-xs font-medium"><Trash size={14} /> <span>Move original to Trash after saving</span></div>
                         <input type="checkbox" checked={deleteAfterSave} onChange={(e) => setDeleteAfterSave(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500" />
                      </div>
                     <div><label className="block text-sm font-medium text-gray-700 mb-1">OAuth 2.0 Client ID</label><input type="text" value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono" /></div>

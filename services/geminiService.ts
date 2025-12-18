@@ -5,8 +5,8 @@ import { FoodAnalysis } from "../types";
 const analysisSchema = {
   type: Type.OBJECT,
   properties: {
-    isFood: { type: Type.BOOLEAN, description: "True if the main subject is food." },
-    hasExistingText: { type: Type.BOOLEAN, description: "True if the image already contains significant visible text." },
+    isFood: { type: Type.BOOLEAN, description: "True if the main subject is food. False if it is a menu, a person, a wrapper, or blurry." },
+    hasExistingText: { type: Type.BOOLEAN, description: "True if the image already contains significant visible text overlays, watermarks, or nutrition labels." },
     mealType: { type: Type.STRING, description: "E.g., Breakfast, Lunch, Dinner, Snack." },
     summary: { type: Type.STRING, description: "A short 5-8 word summary of the dish." },
     items: {
@@ -35,7 +35,7 @@ const analysisSchema = {
       required: ["calories", "carbs", "protein", "fat"],
     },
   },
-  required: ["isFood", "items", "nutrition", "mealType", "summary"],
+  required: ["isFood", "hasExistingText", "items", "nutrition", "mealType", "summary"],
 };
 
 // Helper function to handle exponential backoff for API rate limits.
@@ -89,18 +89,18 @@ export async function analyzeFoodImage(
               },
             },
             {
-              text: `Analyze this image for a food tracking app. 
-              1. Determine if it is food. 
-              2. Identify specific ingredients/parts (like 'Steak', 'Eggs', 'Broccoli') and provide their bounding box [ymin, xmin, ymax, xmax] on a 0-1000 scale.
-              3. Estimate the nutrition facts for the whole plate.
-              4. Detect if there is already text overlay on the image.`,
+              text: `Analyze this image for a bulk food processing tool.
+              1. **Verification**: Determine if the *main subject* is real food. If it is a menu, a recipe book, a human face, an empty plate, or just a wrapper, set 'isFood' to false.
+              2. **Text Detection**: Check if the image *already* has text overlays, watermarks, subtitles, or nutrition facts added to it. If yes, set 'hasExistingText' to true.
+              3. **Analysis**: Identify specific ingredients (e.g. 'Steak', 'Eggs', 'Rice') and provide 2D bounding boxes (0-1000 scale).
+              4. **Nutrition**: Estimate nutrition facts for the visible portion.`,
             },
           ],
         },
         config: {
           responseMimeType: "application/json",
           responseSchema: analysisSchema,
-          systemInstruction: "You are a specialized nutritionist AI. You are accurate with identifying food items and estimating their position in the photo.",
+          systemInstruction: "You are a rigid food analysis AI. You flag images with existing text overlays and reject non-food images.",
         },
       });
 
