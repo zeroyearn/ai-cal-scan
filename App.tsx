@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash } from 'lucide-react';
@@ -9,7 +8,7 @@ import { resizeImage, getInitialLayout, generateCardSprite, generateLabelSprite,
 // --- Google Drive Configuration ---
 const DEFAULT_GOOGLE_CLIENT_ID = "959444237240-lca07hnf1qclkj3o93o1k3kuo65bkqr7.apps.googleusercontent.com"; 
 const DEFAULT_API_KEY = process.env.API_KEY || ""; 
-// Added https://www.googleapis.com/auth/drive to allow deletion of original files
+// Required scopes for Picker and basic Drive operations.
 const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive';
 
 const dataURLtoBlob = (dataurl: string) => {
@@ -31,6 +30,10 @@ function App() {
   const [batchSelection, setBatchSelection] = useState<Set<string>>(new Set());
   const [exportTag, setExportTag] = useState("Food");
   const [deleteAfterSave, setDeleteAfterSave] = useState(false);
+
+  // Gemini Settings
+  const [geminiApiKey, setGeminiApiKey] = useState(process.env.API_KEY || "");
+  const [geminiApiUrl, setGeminiApiUrl] = useState("");
 
   const [editorContainerRef, setEditorContainerRef] = useState<HTMLDivElement | null>(null);
   const [cardSprite, setCardSprite] = useState<string>("");
@@ -55,16 +58,22 @@ function App() {
     const storedId = localStorage.getItem('aical_google_client_id');
     const storedKey = localStorage.getItem('aical_google_api_key');
     const storedDeleteOption = localStorage.getItem('aical_delete_after_save');
+    const storedGeminiKey = localStorage.getItem('aical_gemini_api_key');
+    const storedGeminiUrl = localStorage.getItem('aical_gemini_api_url');
 
     if (storedId) setGoogleClientId(storedId);
     if (storedKey) setGoogleApiKey(storedKey);
     if (storedDeleteOption) setDeleteAfterSave(storedDeleteOption === 'true');
+    if (storedGeminiKey) setGeminiApiKey(storedGeminiKey);
+    if (storedGeminiUrl) setGeminiApiUrl(storedGeminiUrl);
   }, []);
 
   const saveSettings = () => {
     localStorage.setItem('aical_google_client_id', googleClientId);
     localStorage.setItem('aical_google_api_key', googleApiKey);
     localStorage.setItem('aical_delete_after_save', String(deleteAfterSave));
+    localStorage.setItem('aical_gemini_api_key', geminiApiKey);
+    localStorage.setItem('aical_gemini_api_url', geminiApiUrl);
     setAccessToken(null);
     tokenClientRef.current = null;
     setShowDriveSettings(false);
@@ -99,7 +108,11 @@ function App() {
     }
     try {
         const google = (window as any).google;
-        if (!google) return;
+        if (!google) {
+            alert("Google Scripts not yet loaded. Please refresh.");
+            setIsDriveLoading(false);
+            return;
+        }
         if (!tokenClientRef.current) {
             tokenClientRef.current = google.accounts.oauth2.initTokenClient({
                 client_id: googleClientId,
@@ -129,79 +142,104 @@ function App() {
   const createPicker = useCallback((token: string) => {
     try {
       const google = (window as any).google;
-      const pickerCallback = async (data: any) => {
-        if (data.action === google.picker.Action.PICKED) {
-          const docs = data.docs;
-          const newImages: ProcessedImage[] = [];
-          for (const doc of docs) {
-             try {
-              const fileId = doc.id;
-              const mimeType = doc.mimeType;
-              const fileName = doc.name;
-              const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              if (!response.ok) throw new Error("Failed to download file");
-              const blob = await response.blob();
-              const file = new File([blob], fileName, { type: mimeType });
-              newImages.push({
-                id: Math.random().toString(36).substr(2, 9),
-                file,
-                previewUrl: URL.createObjectURL(file),
-                status: 'idle',
-                driveFileId: fileId // Track the original ID
-              });
-             } catch(e) { console.error(e) }
+      const gapi = (window as any).gapi;
+
+      const showPicker = () => {
+        const pickerCallback = async (data: any) => {
+          if (data.action === google.picker.Action.PICKED) {
+            const docs = data.docs;
+            const newImages: ProcessedImage[] = [];
+            for (const doc of docs) {
+               try {
+                const fileId = doc.id;
+                const mimeType = doc.mimeType;
+                const fileName = doc.name;
+                const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                if (!response.ok) throw new Error("Failed to download file");
+                const blob = await response.blob();
+                const file = new File([blob], fileName, { type: mimeType });
+                newImages.push({
+                  id: Math.random().toString(36).substr(2, 9),
+                  file,
+                  previewUrl: URL.createObjectURL(file),
+                  status: 'idle',
+                  driveFileId: fileId
+                });
+               } catch(e) { console.error(e) }
+            }
+            if (newImages.length > 0) setImages((prev) => [...prev, ...newImages]);
           }
-          if (newImages.length > 0) setImages((prev) => [...prev, ...newImages]);
-        }
-        setIsDriveLoading(false);
+          setIsDriveLoading(false);
+        };
+
+        const view = new google.picker.View(google.picker.ViewId.DOCS_IMAGES);
+        view.setMimeTypes("image/png,image/jpeg,image/jpg");
+        const picker = new google.picker.PickerBuilder()
+          .setDeveloperKey(googleApiKey)
+          .setAppId(googleClientId)
+          .setOAuthToken(token)
+          .addView(view)
+          .addView(new google.picker.DocsUploadView())
+          .setCallback(pickerCallback)
+          .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+          .enableFeature(google.picker.Feature.SUPPORT_DRIVES)
+          .build();
+        picker.setVisible(true);
       };
 
-      const view = new google.picker.View(google.picker.ViewId.DOCS_IMAGES);
-      view.setMimeTypes("image/png,image/jpeg,image/jpg");
-      const picker = new google.picker.PickerBuilder()
-        .setDeveloperKey(googleApiKey)
-        .setAppId(googleClientId)
-        .setOAuthToken(token)
-        .addView(view)
-        .addView(new google.picker.DocsUploadView())
-        .setCallback(pickerCallback)
-        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
-        .enableFeature(google.picker.Feature.SUPPORT_DRIVES)
-        .build();
-      picker.setVisible(true);
+      // CRITICAL: Ensure picker library is loaded before builder
+      if (!google.picker) {
+        gapi.load('picker', showPicker);
+      } else {
+        showPicker();
+      }
     } catch (e: any) {
+      console.error("Picker creation failed:", e);
       setIsDriveLoading(false);
     }
   }, [googleApiKey, googleClientId]);
 
   const createFolderPicker = useCallback((token: string, onFolderSelect: (folderId: string) => void) => {
     const google = (window as any).google;
-    const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
-        .setSelectFolderEnabled(true)
-        .setIncludeFolders(true)
-        .setMimeTypes('application/vnd.google-apps.folder');
-    const picker = new google.picker.PickerBuilder()
-        .setDeveloperKey(googleApiKey)
-        .setAppId(googleClientId)
-        .setOAuthToken(token)
-        .addView(view)
-        .setCallback((data: any) => {
-            if (data.action === google.picker.Action.PICKED) {
-                const doc = data.docs[0];
-                if (doc) onFolderSelect(doc.id);
-            }
-        })
-        .setTitle("Select Destination Folder")
-        .build();
-    picker.setVisible(true);
+    const gapi = (window as any).gapi;
+
+    const showFolderPicker = () => {
+        const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+            .setSelectFolderEnabled(true)
+            .setIncludeFolders(true)
+            .setMimeTypes('application/vnd.google-apps.folder');
+        const picker = new google.picker.PickerBuilder()
+            .setDeveloperKey(googleApiKey)
+            .setAppId(googleClientId)
+            .setOAuthToken(token)
+            .addView(view)
+            .setCallback((data: any) => {
+                if (data.action === google.picker.Action.PICKED) {
+                    const doc = data.docs[0];
+                    if (doc) onFolderSelect(doc.id);
+                }
+            })
+            .setTitle("Select Destination Folder")
+            .build();
+        picker.setVisible(true);
+    };
+
+    if (!google.picker) {
+        gapi.load('picker', showFolderPicker);
+    } else {
+        showFolderPicker();
+    }
   }, [googleApiKey, googleClientId]);
 
   const handleDriveImport = async () => {
     if (!googleClientId || !googleApiKey) { setShowDriveSettings(true); return; }
     if (accessToken) { createPicker(accessToken); } 
-    else { setIsDriveLoading(true); requestGoogleAuth((token) => createPicker(token)); }
+    else { 
+        setIsDriveLoading(true); 
+        requestGoogleAuth((token) => createPicker(token)); 
+    }
   };
 
   const handleSaveToDrive = async () => {
@@ -225,7 +263,6 @@ function App() {
             });
             if (!response.ok) throw new Error('Upload failed');
             
-            // Delete original if requested
             if (deleteAfterSave && selectedImage.driveFileId) {
                 await deleteFromDrive(selectedImage.driveFileId, token);
                 setImages(prev => prev.map(img => img.id === selectedImage.id ? { ...img, driveFileId: undefined } : img));
@@ -314,8 +351,8 @@ function App() {
             setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'analyzing' } : p));
             const { base64: base64Data, mimeType } = await resizeImage(imgData.file);
             const correctedPreviewUrl = `data:${mimeType};base64,${base64Data}`;
-            // Use Gemini API service with environment variable key.
-            const analysis = await analyzeFoodImage(base64Data, mimeType);
+            // Pass custom settings for aggregate APIs
+            const analysis = await analyzeFoodImage(base64Data, mimeType, geminiApiKey, geminiApiUrl);
             if (!analysis.isFood) {
                 setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'not-food', error: 'Not recognized as food' } : p));
                 return;
@@ -337,7 +374,6 @@ function App() {
     setIsProcessing(false);
   };
 
-  // Fix: Implemented toggleSelection to allow users to select/deselect items for batch operations.
   const toggleSelection = (id: string) => {
     setBatchSelection(prev => {
       const next = new Set(prev);
@@ -350,7 +386,6 @@ function App() {
     });
   };
 
-  // Fix: Implemented toggleSelectAll to allow users to quickly select/deselect all items in the queue.
   const toggleSelectAll = () => {
     if (batchSelection.size === images.length && images.length > 0) {
       setBatchSelection(new Set());
@@ -648,6 +683,13 @@ function App() {
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Settings size={24} className="text-gray-500" />Settings</h2><button onClick={() => setShowDriveSettings(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors"><X size={20} /></button></div>
             <div className="space-y-6">
+                <div className="space-y-3">
+                    <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Sparkles size={16} className="text-purple-600"/>Gemini AI Configuration</h3>
+                    <div className="space-y-4">
+                      <div><label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label><input type="password" value={geminiApiKey} onChange={(e) => setGeminiApiKey(e.target.value)} placeholder="AIza..." className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono" /></div>
+                      <div><label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">Gemini API Base URL</label><div className="relative"><Globe className="absolute left-3 top-2.5 text-gray-400" size={16} /><input type="text" value={geminiApiUrl} onChange={(e) => setGeminiApiUrl(e.target.value)} placeholder="https://..." className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono" /></div></div>
+                    </div>
+                </div>
                 <div className="space-y-3 pt-2">
                      <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Cloud size={16} className="text-blue-600"/>Google Drive Integration</h3>
                      <div className="flex items-center justify-between p-3 bg-orange-50 border border-orange-100 rounded-lg">

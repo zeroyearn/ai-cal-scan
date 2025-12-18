@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { FoodAnalysis } from "../types";
 
@@ -43,16 +42,42 @@ const analysisSchema = {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Analyzes a food image using the Gemini API.
-export async function analyzeFoodImage(base64Image: string, mimeType: string): Promise<FoodAnalysis> {
+export async function analyzeFoodImage(
+  base64Image: string, 
+  mimeType: string, 
+  apiKey?: string, 
+  baseUrl?: string
+): Promise<FoodAnalysis> {
   const maxRetries = 3;
   let attempt = 0;
 
-  // Initialize the GenAI client exclusively with the environment variable as per guidelines.
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // Prioritize provided key (for third-party proxies) or fallback to system environment variable.
+  const effectiveKey = apiKey || process.env.API_KEY;
+  if (!effectiveKey) {
+    throw new Error("Gemini API Key is missing. Please configure it in Settings.");
+  }
+
+  const clientConfig: any = { apiKey: effectiveKey };
+  
+  // Handle custom Base URL for aggregate APIs
+  if (baseUrl && baseUrl.trim().length > 0) {
+    let url = baseUrl.trim();
+    if (url.endsWith('/')) {
+      url = url.slice(0, -1);
+    }
+    clientConfig.baseUrl = url;
+  }
+
+  // Aggregated APIs often need Bearer token authorization.
+  clientConfig.customHeaders = {
+    'Authorization': `Bearer ${effectiveKey}`
+  };
+
+  const ai = new GoogleGenAI(clientConfig);
 
   while (attempt <= maxRetries) {
     try {
-      // Use gemini-3-flash-preview as the default model for vision-based reasoning tasks.
+      // Use gemini-3-flash-preview as the default model.
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: {
