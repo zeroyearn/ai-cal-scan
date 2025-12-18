@@ -1,10 +1,9 @@
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+
+import { GoogleGenAI, Type } from "@google/genai";
 import { FoodAnalysis } from "../types";
 
-// Removed global instance to support dynamic API keys
-// const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-const analysisSchema: Schema = {
+// The analysis schema for the model's response in JSON format.
+const analysisSchema = {
   type: Type.OBJECT,
   properties: {
     isFood: { type: Type.BOOLEAN, description: "True if the main subject is food." },
@@ -40,44 +39,22 @@ const analysisSchema: Schema = {
   required: ["isFood", "items", "nutrition", "mealType", "summary"],
 };
 
-// Helper function to wait
+// Helper function to handle exponential backoff for API rate limits.
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-export async function analyzeFoodImage(base64Image: string, mimeType: string, apiKey?: string, baseUrl?: string): Promise<FoodAnalysis> {
+// Analyzes a food image using the Gemini API.
+export async function analyzeFoodImage(base64Image: string, mimeType: string): Promise<FoodAnalysis> {
   const maxRetries = 3;
   let attempt = 0;
 
-  // Use provided key or fallback to env
-  const effectiveKey = apiKey || process.env.API_KEY;
-  if (!effectiveKey) {
-      throw new Error("Gemini API Key is missing. Please configure it in Settings.");
-  }
-  
-  // Instantiate client with the specific key and optional base URL
-  const clientConfig: any = { apiKey: effectiveKey };
-  
-  if (baseUrl && baseUrl.trim().length > 0) {
-    let url = baseUrl.trim();
-    // Remove trailing slash to ensure clean path concatenation by SDK
-    if (url.endsWith('/')) {
-        url = url.slice(0, -1);
-    }
-    clientConfig.baseUrl = url;
-  }
-
-  // Support for Third-Party Aggregators (OneAPI, NewAPI, etc.)
-  // These services often require the API Key in the 'Authorization: Bearer' header 
-  // in addition to (or instead of) the standard 'x-goog-api-key'.
-  clientConfig.customHeaders = {
-    'Authorization': `Bearer ${effectiveKey}`
-  };
-
-  const ai = new GoogleGenAI(clientConfig);
+  // Initialize the GenAI client exclusively with the environment variable as per guidelines.
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   while (attempt <= maxRetries) {
     try {
+      // Use gemini-3-flash-preview as the default model for vision-based reasoning tasks.
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3-flash-preview",
         contents: {
           parts: [
             {
@@ -112,7 +89,6 @@ export async function analyzeFoodImage(base64Image: string, mimeType: string, ap
     } catch (error: any) {
       attempt++;
       
-      // Check for 503 (Service Unavailable) or 429 (Too Many Requests)
       const isOverloaded = 
         error?.status === 503 || 
         error?.status === 429 || 
@@ -123,7 +99,6 @@ export async function analyzeFoodImage(base64Image: string, mimeType: string, ap
         error?.message?.toLowerCase().includes('quota');
 
       if (isOverloaded && attempt <= maxRetries) {
-        // Exponential backoff: 1s, 2s, 4s...
         const waitTime = Math.pow(2, attempt - 1) * 1000;
         console.warn(`Gemini API Busy/Rate Limit (${error.status || 'Error'}). Retrying in ${waitTime}ms... (Attempt ${attempt}/${maxRetries})`);
         await delay(waitTime);

@@ -53,4 +53,5 @@ export interface ProcessedImage {
   layout?: ImageLayout; // The dynamic layout configuration
   resultUrl?: string; // The flattened result (generated from layout)
   error?: string;
+  driveFileId?: string; // ID of the original file if imported from Google Drive
 }
