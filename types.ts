@@ -18,6 +18,8 @@ export interface FoodAnalysis {
   items: FoodItem[];
   nutrition: NutritionInfo;
   summary: string;
+  healthScore?: number; // 1-10 scale
+  healthTag?: string; // Short health benefit description
 }
 
 // --- Layout Types ---
@@ -50,6 +52,8 @@ export interface LayoutConfig {
   defaultTitleScale: number;
   defaultCardScale: number;
   defaultLabelScale: number;
+  defaultTitlePos?: { x: number, y: number };
+  defaultCardPos?: { x: number, y: number };
 }
 
 export type ProcessStatus = 'idle' | 'analyzing' | 'rendering' | 'complete' | 'error' | 'not-food';

@@ -9,6 +9,8 @@ const analysisSchema = {
     hasExistingText: { type: Type.BOOLEAN, description: "True if the image contains visible text describing the food, nutrition labels, or branding overlays." },
     mealType: { type: Type.STRING, description: "E.g., Breakfast, Lunch, Dinner, Snack." },
     summary: { type: Type.STRING, description: "A short 5-8 word summary of the dish." },
+    healthScore: { type: Type.NUMBER, description: "A health score from 1 to 10 based on nutritional density and balance (10 is healthiest)." },
+    healthTag: { type: Type.STRING, description: "A very short (max 5 words) description of the key health benefit. E.g., 'High in Protein', 'Rich in Vitamins', 'Heart Healthy'." },
     items: {
       type: Type.ARRAY,
       items: {
@@ -92,15 +94,16 @@ export async function analyzeFoodImage(
               text: `Analyze this image for a bulk food processing tool.
               1. **Verification**: Determine if the *main subject* is real food. If it is a menu, a recipe book, a human face, an empty plate, or just a wrapper, set 'isFood' to false.
               2. **Text Detection**: Check if the image *already* has text overlays, watermarks, subtitles, or nutrition facts added to it. If yes, set 'hasExistingText' to true.
-              3. **Analysis**: Identify specific ingredients (e.g. 'Steak', 'Eggs', 'Rice') and provide 2D bounding boxes (0-1000 scale).
-              4. **Nutrition**: Estimate nutrition facts for the visible portion.`,
+              3. **Analysis**: Identify specific ingredients. IMPORTANT: If there are multiple identical items (e.g. a pile of potatoes, multiple cookies), only detect ONE representative item (preferably the most central one) to label. Do NOT label every single instance.
+              4. **Health Score**: If it is a clear food item, provide a 'healthScore' (1-10) and a 'healthTag' (short benefit).
+              5. **Nutrition**: Estimate nutrition facts for the visible portion.`,
             },
           ],
         },
         config: {
           responseMimeType: "application/json",
           responseSchema: analysisSchema,
-          systemInstruction: "You are a rigid food analysis AI. You flag images with existing text overlays and reject non-food images.",
+          systemInstruction: "You are a rigid food analysis AI. You flag images with existing text overlays and reject non-food images. Provide health scores for valid food. Do not output duplicate food items.",
         },
       });
 

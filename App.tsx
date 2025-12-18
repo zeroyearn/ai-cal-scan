@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop } from 'lucide-react';
-import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion } from './types';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop, LayoutTemplate, Plus, Eye, EyeOff, Smartphone } from 'lucide-react';
+import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion, FoodAnalysis } from './types';
 import { analyzeFoodImage } from './services/geminiService';
 import { resizeImage, getInitialLayout, drawScene, renderFinalImage } from './utils/canvasUtils';
 
@@ -11,6 +11,25 @@ const DEFAULT_API_KEY = process.env.API_KEY || "";
 // Use ONLY the full drive scope. Mixing scopes can cause Google to present granular checkboxes, 
 // allowing users to accidentally uncheck "delete/edit" permissions while keeping "view".
 const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive';
+
+// --- Mock Data for Settings Preview ---
+const MOCK_ANALYSIS: FoodAnalysis = {
+  isFood: true,
+  hasExistingText: false,
+  mealType: "Lunch",
+  summary: "Avocado Toast",
+  healthScore: 8,
+  healthTag: "Heart Healthy Fats",
+  items: [
+    { name: "Avocado", box_2d: [400, 300, 600, 700] } // roughly center
+  ],
+  nutrition: {
+    calories: 450,
+    carbs: "45g",
+    protein: "12g",
+    fat: "22g"
+  }
+};
 
 const dataURLtoBlob = (dataurl: string) => {
     const arr = dataurl.split(',');
@@ -50,6 +69,10 @@ function App() {
   const [defaultTitleScale, setDefaultTitleScale] = useState(7.6);
   const [defaultCardScale, setDefaultCardScale] = useState(4.2);
   const [defaultLabelScale, setDefaultLabelScale] = useState(1.0);
+  
+  // Default Positions (Percentage 0-100)
+  const [defaultTitlePos, setDefaultTitlePos] = useState({ x: 50, y: 8 });
+  const [defaultCardPos, setDefaultCardPos] = useState({ x: 5, y: 75 }); // Approximate bottom left
 
   const [editorContainerRef, setEditorContainerRef] = useState<HTMLDivElement | null>(null);
   const [dragTarget, setDragTarget] = useState<{ type: 'card' | 'title' | 'label', id?: number | string } | null>(null);
@@ -59,6 +82,7 @@ function App() {
 
   // Canvas & Interaction
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const settingsCanvasRef = useRef<HTMLCanvasElement>(null);
   const [hitRegions, setHitRegions] = useState<HitRegion[]>([]);
 
   const [isDriveLoading, setIsDriveLoading] = useState(false);
@@ -87,6 +111,9 @@ function App() {
     const storedTitleScale = localStorage.getItem('aical_default_title_scale');
     const storedCardScale = localStorage.getItem('aical_default_card_scale');
     const storedLabelScale = localStorage.getItem('aical_default_label_scale');
+    
+    const storedTitlePos = localStorage.getItem('aical_default_title_pos');
+    const storedCardPos = localStorage.getItem('aical_default_card_pos');
 
     if (storedId) setGoogleClientId(storedId);
     if (storedKey) setGoogleApiKey(storedKey);
@@ -98,7 +125,70 @@ function App() {
     if (storedTitleScale) setDefaultTitleScale(parseFloat(storedTitleScale));
     if (storedCardScale) setDefaultCardScale(parseFloat(storedCardScale));
     if (storedLabelScale) setDefaultLabelScale(parseFloat(storedLabelScale));
+    
+    if (storedTitlePos) setDefaultTitlePos(JSON.parse(storedTitlePos));
+    if (storedCardPos) setDefaultCardPos(JSON.parse(storedCardPos));
   }, []);
+
+  // --- Settings Preview Effect ---
+  useEffect(() => {
+    if (!showDriveSettings || !settingsCanvasRef.current) return;
+    
+    const ctx = settingsCanvasRef.current.getContext('2d');
+    if (!ctx) return;
+
+    // Set preview dimensions (simulating a 9:16 phone ratio)
+    const w = 360; 
+    const h = 640;
+    settingsCanvasRef.current.width = w;
+    settingsCanvasRef.current.height = h;
+
+    // 1. Draw Placeholder Background
+    ctx.fillStyle = '#f3f4f6'; // Light gray
+    ctx.fillRect(0, 0, w, h);
+    
+    // Draw a subtle grid or pattern
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.lineWidth = 1;
+    for(let i=0; i<w; i+=40) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,h); ctx.stroke(); }
+    for(let i=0; i<h; i+=40) { ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(w,i); ctx.stroke(); }
+    
+    // Draw a fake "Food" circle
+    ctx.beginPath();
+    ctx.arc(w/2, h/2, 80, 0, Math.PI * 2);
+    ctx.fillStyle = '#d1d5db';
+    ctx.fill();
+    ctx.font = "bold 14px Inter";
+    ctx.fillStyle = "#6b7280";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Sample Image", w/2, h/2);
+
+    // 2. Generate Layout based on CURRENT Settings
+    const config = {
+        defaultLabelStyle,
+        defaultTitleScale,
+        defaultCardScale,
+        defaultLabelScale,
+        defaultTitlePos,
+        defaultCardPos
+    };
+
+    const layout = getInitialLayout(w, h, MOCK_ANALYSIS, config);
+
+    // 3. Draw Elements using shared logic
+    // Pass null for img so it doesn't try to draw a background image, just overlays
+    drawScene(ctx, null, MOCK_ANALYSIS, layout);
+
+  }, [
+    showDriveSettings, 
+    defaultLabelStyle, 
+    defaultTitleScale, 
+    defaultCardScale, 
+    defaultLabelScale, 
+    defaultTitlePos, 
+    defaultCardPos
+  ]);
 
   const saveSettings = () => {
     localStorage.setItem('aical_google_client_id', googleClientId);
@@ -111,6 +201,9 @@ function App() {
     localStorage.setItem('aical_default_title_scale', String(defaultTitleScale));
     localStorage.setItem('aical_default_card_scale', String(defaultCardScale));
     localStorage.setItem('aical_default_label_scale', String(defaultLabelScale));
+    
+    localStorage.setItem('aical_default_title_pos', JSON.stringify(defaultTitlePos));
+    localStorage.setItem('aical_default_card_pos', JSON.stringify(defaultCardPos));
 
     setShowDriveSettings(false);
   };
@@ -506,7 +599,9 @@ function App() {
                 defaultLabelStyle,
                 defaultTitleScale,
                 defaultCardScale,
-                defaultLabelScale
+                defaultLabelScale,
+                defaultTitlePos,
+                defaultCardPos
             });
             
             setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, previewUrl: correctedPreviewUrl, status: 'complete', analysis, layout } : p));
@@ -681,6 +776,17 @@ function App() {
       const newLayout = { ...img.layout };
       if (type === 'card') newLayout.card = { ...newLayout.card, scale: value };
       else if (type === 'title') newLayout.mealType = { ...newLayout.mealType, scale: value };
+      return { ...img, layout: newLayout };
+    }));
+  };
+
+  const handleVisibilityToggle = (type: 'card' | 'title', isVisible: boolean) => {
+    if (!selectedImage?.layout) return;
+    setImages(prev => prev.map(img => {
+      if (img.id !== selectedImage.id || !img.layout) return img;
+      const newLayout = { ...img.layout };
+      if (type === 'card') newLayout.card = { ...newLayout.card, visible: isVisible };
+      else if (type === 'title') newLayout.mealType = { ...newLayout.mealType, visible: isVisible };
       return { ...img, layout: newLayout };
     }));
   };
@@ -890,13 +996,41 @@ function App() {
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                       <div className="space-y-6">
                           <h5 className="font-medium text-sm text-gray-900 border-b pb-2">Main Elements</h5>
-                          <div className="flex flex-col gap-1">
-                              <div className="flex justify-between text-xs font-medium text-gray-600"><span>Meal Title Size</span><span>{Math.round(selectedImage.layout.mealType.scale * 100)}%</span></div>
-                              <input type="range" min="0" max="20" step="0.1" value={selectedImage.layout.mealType.scale} onChange={(e) => handleScaleChange('title', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+                          
+                          {/* Meal Title Control */}
+                          <div className="flex items-center gap-2">
+                             {selectedImage.layout.mealType.visible ? (
+                                <>
+                                  <div className="flex-1 flex flex-col gap-1">
+                                      <div className="flex justify-between text-xs font-medium text-gray-600"><span>Meal Title Size</span><span>{Math.round(selectedImage.layout.mealType.scale * 100)}%</span></div>
+                                      <input type="range" min="0" max="20" step="0.1" value={selectedImage.layout.mealType.scale} onChange={(e) => handleScaleChange('title', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+                                  </div>
+                                  <button onClick={() => handleVisibilityToggle('title', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Title"><Trash2 size={16}/></button>
+                                </>
+                             ) : (
+                                <div className="flex-1 flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200 border-dashed">
+                                    <span className="text-sm text-gray-400 italic">Meal Title Hidden</span>
+                                    <button onClick={() => handleVisibilityToggle('title', true)} className="flex items-center gap-1.5 text-xs font-medium bg-white border border-gray-200 px-3 py-1.5 rounded-md hover:text-blue-600 hover:border-blue-200 transition-colors"><Plus size={14}/> Restore</button>
+                                </div>
+                             )}
                           </div>
-                          <div className="flex flex-col gap-1">
-                              <div className="flex justify-between text-xs font-medium text-gray-600"><span>Nutrition Card Size</span><span>{Math.round(selectedImage.layout.card.scale * 100)}%</span></div>
-                              <input type="range" min="0" max="20" step="0.1" value={selectedImage.layout.card.scale} onChange={(e) => handleScaleChange('card', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+
+                          {/* Nutrition Card Control */}
+                          <div className="flex items-center gap-2">
+                              {selectedImage.layout.card.visible ? (
+                                <>
+                                  <div className="flex-1 flex flex-col gap-1">
+                                      <div className="flex justify-between text-xs font-medium text-gray-600"><span>Nutrition Card Size</span><span>{Math.round(selectedImage.layout.card.scale * 100)}%</span></div>
+                                      <input type="range" min="0" max="20" step="0.1" value={selectedImage.layout.card.scale} onChange={(e) => handleScaleChange('card', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+                                  </div>
+                                  <button onClick={() => handleVisibilityToggle('card', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Card"><Trash2 size={16}/></button>
+                                </>
+                              ) : (
+                                <div className="flex-1 flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200 border-dashed">
+                                    <span className="text-sm text-gray-400 italic">Nutrition Card Hidden</span>
+                                    <button onClick={() => handleVisibilityToggle('card', true)} className="flex items-center gap-1.5 text-xs font-medium bg-white border border-gray-200 px-3 py-1.5 rounded-md hover:text-blue-600 hover:border-blue-200 transition-colors"><Plus size={14}/> Restore</button>
+                                </div>
+                              )}
                           </div>
                       </div>
                       <div>
@@ -948,9 +1082,12 @@ function App() {
       </main>
       {showDriveSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl max-w-6xl w-full p-6 animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Settings size={24} className="text-gray-500" />Settings</h2><button onClick={() => setShowDriveSettings(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors"><X size={20} /></button></div>
-            <div className="space-y-6">
+            
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* Left Column: Controls */}
+              <div className="lg:col-span-2 space-y-6">
                 <div className="space-y-3">
                     <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Sparkles size={16} className="text-purple-600"/>Gemini AI Configuration</h3>
                     <div className="space-y-4">
@@ -994,6 +1131,34 @@ function App() {
                 </div>
 
                 <div className="space-y-3 pt-2">
+                    <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><LayoutTemplate size={16} className="text-indigo-600"/>Default Layout Positions</h3>
+                    <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-lg border border-gray-100">
+                        <div className="space-y-2">
+                             <span className="text-xs font-bold text-gray-500 uppercase">Meal Title</span>
+                             <div>
+                                 <div className="flex justify-between text-xs text-gray-600 mb-1"><span>X Position</span><span>{defaultTitlePos.x}%</span></div>
+                                 <input type="range" min="0" max="100" value={defaultTitlePos.x} onChange={(e) => setDefaultTitlePos({...defaultTitlePos, x: Number(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
+                             </div>
+                             <div>
+                                 <div className="flex justify-between text-xs text-gray-600 mb-1"><span>Y Position</span><span>{defaultTitlePos.y}%</span></div>
+                                 <input type="range" min="0" max="100" value={defaultTitlePos.y} onChange={(e) => setDefaultTitlePos({...defaultTitlePos, y: Number(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
+                             </div>
+                        </div>
+                        <div className="space-y-2">
+                             <span className="text-xs font-bold text-gray-500 uppercase">Nutrition Card</span>
+                             <div>
+                                 <div className="flex justify-between text-xs text-gray-600 mb-1"><span>X Position</span><span>{defaultCardPos.x}%</span></div>
+                                 <input type="range" min="0" max="100" value={defaultCardPos.x} onChange={(e) => setDefaultCardPos({...defaultCardPos, x: Number(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
+                             </div>
+                             <div>
+                                 <div className="flex justify-between text-xs text-gray-600 mb-1"><span>Y Position</span><span>{defaultCardPos.y}%</span></div>
+                                 <input type="range" min="0" max="100" value={defaultCardPos.y} onChange={(e) => setDefaultCardPos({...defaultCardPos, y: Number(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
+                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="space-y-3 pt-2">
                      <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Cloud size={16} className="text-blue-600"/>Google Drive Integration</h3>
                      <div className="flex items-center justify-between p-3 bg-orange-50 border border-orange-100 rounded-lg">
                         <div className="flex items-center gap-2 text-orange-800 text-xs font-medium"><Trash size={14} /> <span>Move original to Trash after saving</span></div>
@@ -1010,7 +1175,22 @@ function App() {
                         <button onClick={handleResetAuth} className="text-red-500 text-xs font-medium hover:text-red-700 flex items-center gap-1 hover:bg-red-50 px-2 py-1 rounded transition-colors" title="Force re-login next time"><RotateCcw size={12}/> Reset Access</button>
                     </div>
                 </div>
+              </div>
+
+              {/* Right Column: Live Preview */}
+              <div className="lg:col-span-1">
+                <div className="sticky top-0 space-y-3">
+                   <h3 className="text-sm font-semibold text-gray-900 border-b pb-2 flex items-center gap-2"><Smartphone size={16} className="text-gray-600"/>Live Preview</h3>
+                   <div className="bg-gray-900 rounded-[2.5rem] p-3 shadow-2xl border-4 border-gray-800 mx-auto max-w-[320px]">
+                      <div className="bg-white rounded-[2rem] overflow-hidden relative w-full aspect-[9/16] bg-gray-50">
+                         <canvas ref={settingsCanvasRef} className="w-full h-full object-contain"/>
+                      </div>
+                   </div>
+                   <p className="text-xs text-center text-gray-500">Previewing with 9:16 layout</p>
+                </div>
+              </div>
             </div>
+
             <div className="mt-8 flex justify-end"><button onClick={saveSettings} className="bg-black text-white px-5 py-2 rounded-lg hover:bg-gray-800 transition-colors font-medium">Save & Close</button></div>
           </div>
         </div>

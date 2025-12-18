@@ -143,7 +143,35 @@ export const renderFinalImage = async (
 // --- Internal Drawing Functions (Returns Bounding Box for Hit Testing) ---
 
 function measureLabelText(ctx: CanvasRenderingContext2D, text: string, scale: number, isTextOnly: boolean) {
+    const lines = text.split('\n');
     const fontSize = 28 * scale;
+    
+    if (lines.length > 1) {
+        // Multi-line measurement
+        
+        // Line 1: Main Title
+        ctx.font = isTextOnly 
+          ? `800 ${fontSize}px Inter, sans-serif`
+          : `600 ${fontSize}px Inter, sans-serif`;
+        const m1 = ctx.measureText(lines[0]);
+        
+        // Line 2: Subtitle (smaller)
+        const subFontSize = fontSize * 0.7; // 70% size
+        ctx.font = isTextOnly 
+          ? `600 ${subFontSize}px Inter, sans-serif`
+          : `500 ${subFontSize}px Inter, sans-serif`;
+        const m2 = ctx.measureText(lines[1]);
+        
+        const maxW = Math.max(m1.width, m2.width);
+        const paddingX = isTextOnly ? 4 * scale : 20 * scale; // More padding for pills with subtitles
+        const w = maxW + (paddingX * 2);
+        
+        // Height: Title + Gap + Subtitle
+        const h = (fontSize * 1.3) + (subFontSize * 1.4);
+        return { w, h };
+    }
+
+    // Single Line Logic
     ctx.font = isTextOnly 
       ? `800 ${fontSize}px Inter, sans-serif`
       : `600 ${fontSize}px Inter, sans-serif`;
@@ -157,7 +185,10 @@ function measureLabelText(ctx: CanvasRenderingContext2D, text: string, scale: nu
 
 function drawLabelPillInternal(ctx: CanvasRenderingContext2D, text: string, centerX: number, centerY: number, scale: number) {
   const { w, h } = measureLabelText(ctx, text, scale, false);
-  const r = h / 2;
+  const lines = text.split('\n');
+  
+  // For multi-line, use a fixed radius instead of full pill shape if it gets too tall
+  const r = lines.length > 1 ? 16 * scale : h / 2;
   const x = centerX - w / 2;
   const y = centerY - h / 2;
 
@@ -174,11 +205,31 @@ function drawLabelPillInternal(ctx: CanvasRenderingContext2D, text: string, cent
 
   // Text
   const fontSize = 28 * scale;
-  ctx.font = `600 ${fontSize}px Inter, sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "#111827";
-  ctx.fillText(text, centerX, centerY);
+  
+  if (lines.length > 1) {
+      const subFontSize = fontSize * 0.7;
+      
+      // Title
+      ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillStyle = "#111827";
+      // Slightly above center
+      ctx.fillText(lines[0], centerX, centerY - 2 * scale);
+      
+      // Subtitle
+      ctx.font = `500 ${subFontSize}px Inter, sans-serif`;
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "#4b5563"; // Gray-600
+      ctx.fillText(lines[1], centerX, centerY + 2 * scale);
+
+  } else {
+      ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#111827";
+      ctx.fillText(text, centerX, centerY);
+  }
 
   return { x, y, w, h };
 }
@@ -190,25 +241,71 @@ function drawLabelTextOnlyInternal(ctx: CanvasRenderingContext2D, text: string, 
   
   ctx.save();
   const fontSize = 28 * scale;
-  ctx.font = `800 ${fontSize}px Inter, sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  
-  // Thick Outline
-  ctx.lineWidth = 4 * scale;
-  ctx.strokeStyle = "rgba(0,0,0,0.8)";
-  ctx.lineJoin = "round";
-  ctx.miterLimit = 2;
-  ctx.strokeText(text, centerX, centerY);
+  const lines = text.split('\n');
 
-  // Soft Shadow
-  ctx.shadowColor = "rgba(0,0,0,0.6)";
-  ctx.shadowBlur = 6 * scale;
-  ctx.shadowOffsetY = 2 * scale;
+  ctx.textAlign = "center";
   
-  // Main Text
-  ctx.fillStyle = "white";
-  ctx.fillText(text, centerX, centerY);
+  if (lines.length > 1) {
+      const subFontSize = fontSize * 0.7;
+      
+      // Common settings
+      ctx.lineJoin = "round";
+      ctx.miterLimit = 2;
+
+      // --- Line 1 (Title) ---
+      const y1 = centerY - 2 * scale;
+      ctx.font = `800 ${fontSize}px Inter, sans-serif`;
+      ctx.textBaseline = "bottom";
+      
+      // Outline (No shadow on stroke to keep it crisp)
+      ctx.shadowColor = "transparent";
+      ctx.lineWidth = 4 * scale;
+      ctx.strokeStyle = "rgba(0,0,0,0.8)";
+      ctx.strokeText(lines[0], centerX, y1);
+      
+      // Fill (With Shadow)
+      ctx.shadowColor = "rgba(0,0,0,0.6)";
+      ctx.shadowBlur = 6 * scale;
+      ctx.shadowOffsetY = 2 * scale;
+      ctx.fillStyle = "white";
+      ctx.fillText(lines[0], centerX, y1);
+
+      // --- Line 2 (Subtitle) ---
+      const y2 = centerY + 2 * scale;
+      ctx.font = `600 ${subFontSize}px Inter, sans-serif`; 
+      ctx.textBaseline = "top";
+      
+      // Outline
+      ctx.shadowColor = "transparent";
+      ctx.lineWidth = 3 * scale;
+      ctx.strokeStyle = "rgba(0,0,0,0.8)";
+      ctx.strokeText(lines[1], centerX, y2);
+      
+      // Fill
+      ctx.shadowColor = "rgba(0,0,0,0.6)";
+      ctx.fillStyle = "#f3f4f6"; // Slight off-white
+      ctx.fillText(lines[1], centerX, y2);
+
+  } else {
+      ctx.font = `800 ${fontSize}px Inter, sans-serif`;
+      ctx.textBaseline = "middle";
+      
+      // Thick Outline
+      ctx.lineWidth = 4 * scale;
+      ctx.strokeStyle = "rgba(0,0,0,0.8)";
+      ctx.lineJoin = "round";
+      ctx.miterLimit = 2;
+      ctx.strokeText(text, centerX, centerY);
+
+      // Soft Shadow
+      ctx.shadowColor = "rgba(0,0,0,0.6)";
+      ctx.shadowBlur = 6 * scale;
+      ctx.shadowOffsetY = 2 * scale;
+      
+      // Main Text
+      ctx.fillStyle = "white";
+      ctx.fillText(text, centerX, centerY);
+  }
   
   ctx.restore();
 
@@ -269,26 +366,70 @@ function drawNutritionCardInternal(ctx: CanvasRenderingContext2D, analysis: Food
 
   const contentStartY = y + paddingY + headerH;
   
-  // Badge
-  const badgeW = 70 * scale;
-  const badgeH = 36 * scale;
-  const badgeX = x + cardW - paddingX - badgeW;
-  const badgeY = contentStartY;
-  
-  ctx.strokeStyle = "#111827";
-  ctx.lineWidth = 1.5 * scale;
-  ctx.beginPath();
-  ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeH/2);
-  ctx.stroke();
-  
-  ctx.font = `600 ${16 * scale}px Inter, sans-serif`;
-  ctx.fillStyle = "#111827";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(`${analysis.items.length} 🥣`, badgeX + badgeW/2, badgeY + badgeH/2 + 2*scale);
+  // Badge - If Health Score exists, show it. Otherwise show item count.
+  if (analysis.healthScore !== undefined) {
+      // Draw Health Score Badge
+      const score = analysis.healthScore;
+      const badgeW = 90 * scale;
+      const badgeH = 36 * scale;
+      const badgeX = x + cardW - paddingX - badgeW;
+      const badgeY = contentStartY;
+      
+      let badgeColor = "#22c55e"; // Green (High)
+      let badgeBg = "#f0fdf4";
+      let badgeText = "#15803d";
+      
+      if (score < 7) { 
+          badgeColor = "#f97316"; // Orange (Mid)
+          badgeBg = "#fff7ed";
+          badgeText = "#c2410c";
+      }
+      if (score < 4) {
+          badgeColor = "#ef4444"; // Red (Low)
+          badgeBg = "#fef2f2";
+          badgeText = "#b91c1c";
+      }
+      
+      ctx.fillStyle = badgeBg;
+      ctx.strokeStyle = badgeColor;
+      ctx.lineWidth = 1.5 * scale;
+      ctx.beginPath();
+      ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeH/2);
+      ctx.fill();
+      ctx.stroke();
+      
+      ctx.font = `bold ${16 * scale}px Inter, sans-serif`;
+      ctx.fillStyle = badgeText;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`Health: ${score}`, badgeX + badgeW/2, badgeY + badgeH/2 + 1*scale);
+
+  } else {
+      // Draw standard Item Count Badge
+      const badgeW = 70 * scale;
+      const badgeH = 36 * scale;
+      const badgeX = x + cardW - paddingX - badgeW;
+      const badgeY = contentStartY;
+      
+      ctx.strokeStyle = "#111827";
+      ctx.lineWidth = 1.5 * scale;
+      ctx.beginPath();
+      ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeH/2);
+      ctx.stroke();
+      
+      ctx.font = `600 ${16 * scale}px Inter, sans-serif`;
+      ctx.fillStyle = "#111827";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`${analysis.items.length} 🥣`, badgeX + badgeW/2, badgeY + badgeH/2 + 2*scale);
+  }
+
 
   // Title
-  const titleW = cardW - paddingX * 2 - badgeW - 16 * scale;
+  // If health tag exists, we constrain title to fewer lines or shift layout slightly? 
+  // We'll just draw the health tag below the title.
+  
+  const titleW = cardW - paddingX * 2 - 90 * scale - 16 * scale; // Adjust width to account for potential wider health badge
   ctx.font = `600 ${22 * scale}px Inter, sans-serif`; 
   ctx.fillStyle = "#1f2937"; 
   ctx.textAlign = "left";
@@ -318,14 +459,48 @@ function drawNutritionCardInternal(ctx: CanvasRenderingContext2D, analysis: Food
     }
   }
   
-  ctx.fillText(line1, x + paddingX, contentStartY);
+  let currentY = contentStartY;
+  ctx.fillText(line1, x + paddingX, currentY);
+  currentY += 28 * scale;
+  
   if (line2) {
-    ctx.fillText(line2, x + paddingX, contentStartY + 30 * scale);
+    ctx.fillText(line2, x + paddingX, currentY);
+    currentY += 28 * scale;
+  }
+  
+  // Draw Health Tag (Benefit) if exists
+  if (analysis.healthTag) {
+      // Add a small gap if we just wrote text
+      if (!line2) currentY += 4 * scale; // Add a bit of spacing if only 1 line title
+      
+      ctx.font = `500 ${15 * scale}px Inter, sans-serif`;
+      ctx.fillStyle = "#059669"; // Emerald 600
+      ctx.fillText(`✨ ${analysis.healthTag}`, x + paddingX, currentY + 4 * scale);
   }
 
   // Calories
-  const titleHeight = line2 ? 56 * scale : 28 * scale;
-  const calY = contentStartY + titleHeight + 16 * scale;
+  // Fixed positioning logic in original code was specific. 
+  // We need to ensure we don't overlap if we added extra lines.
+  // Original: titleHeight = line2 ? 56 : 28. calY = contentStartY + titleHeight + 16.
+  // New: We use currentY which tracks the bottom of the text block.
+  
+  // But to keep it consistent with the fixed card height (which might be tight), let's stick to the grid
+  // but just push it down if needed? 
+  // Actually, the card height is calculated as baseH + headerH.
+  // To avoid breaking layout, let's keep the calories bar at fixed position if possible, 
+  // or use the original logic if no health tag.
+  
+  const titleHeightBlock = line2 ? 56 * scale : 28 * scale;
+  // If we have a health tag, we effectively "use" the space of a 2nd line or add to it.
+  // Let's assume standard layout handles it well, but if we have tag + 2 lines, it might get tight.
+  
+  let calY = contentStartY + titleHeightBlock + 16 * scale;
+  
+  // If we added a tag, push Cal Y down slightly?
+  if (analysis.healthTag) {
+      calY = Math.max(calY, currentY + 24 * scale);
+  }
+  
   const calH = 64 * scale; 
   const calW = cardW - paddingX * 2;
   
@@ -451,31 +626,42 @@ export const getInitialLayout = (
   const defaultLabelScale = config?.defaultLabelScale ?? 1.0;
   const defaultLabelStyle = config?.defaultLabelStyle ?? 'default';
 
-  // Meal Type: Top Center
+  // --- Meal Type (Title) Position ---
+  // Default: Top Center (x: 0.5, y: 0.08)
+  const titleX = config?.defaultTitlePos?.x !== undefined ? config.defaultTitlePos.x / 100 : 0.5;
+  const titleY = config?.defaultTitlePos?.y !== undefined ? config.defaultTitlePos.y / 100 : 0.08;
+
   const mealType: ElementState = {
-    x: 0.5,
-    y: 0.08,
+    x: titleX,
+    y: titleY,
     scale: defaultTitleScale, 
     text: analysis.mealType,
     visible: true
   };
 
-  // Card: Bottom Left
+  // --- Nutrition Card Position ---
   const cardScaleRef = imgWidth / 1200;
-  
-  // Calculate height with default scale AND Modifier
-  const cardH_px = (260 + 70) * cardScaleRef * (defaultCardScale * CARD_SCALE_MODIFIER);
-  
-  // Margin 32px
-  const margin_px = 32 * cardScaleRef;
-  const visualMarginX = Math.max(0, margin_px); // Simplified margin calc
-  const cardX = visualMarginX / imgWidth;
-  
-  // Position it at bottom with margin
-  let cardY = (imgHeight - cardH_px - margin_px) / imgHeight;
-  
-  // Safety check
-  if (cardY < 0) cardY = 0.05;
+  let cardX, cardY;
+
+  if (config?.defaultCardPos && config.defaultCardPos.x !== undefined && config.defaultCardPos.y !== undefined) {
+      // Use configured defaults (converted from 0-100 to 0-1)
+      cardX = config.defaultCardPos.x / 100;
+      cardY = config.defaultCardPos.y / 100;
+  } else {
+      // Calculate height with default scale AND Modifier to pin to bottom
+      const cardH_px = (260 + 70) * cardScaleRef * (defaultCardScale * CARD_SCALE_MODIFIER);
+      
+      // Margin 32px
+      const margin_px = 32 * cardScaleRef;
+      const visualMarginX = Math.max(0, margin_px); 
+      cardX = visualMarginX / imgWidth;
+      
+      // Position it at bottom with margin
+      cardY = (imgHeight - cardH_px - margin_px) / imgHeight;
+      
+      // Safety check
+      if (cardY < 0) cardY = 0.05;
+  }
 
   const card: ElementState = {
     x: cardX,
@@ -485,27 +671,53 @@ export const getInitialLayout = (
   };
 
   // Labels
-  const labels: LabelState[] = analysis.items.map((item, idx) => {
-    let cx = 0.5;
-    let cy = 0.5;
-    if (item.box_2d && item.box_2d.length === 4) {
-      const [ymin, xmin, ymax, xmax] = item.box_2d;
-      cx = (xmin + xmax) / 2 / 1000;
-      cy = (ymin + ymax) / 2 / 1000;
-    }
+  // Filter duplicates based on name (case-insensitive)
+  const seenNames = new Set<string>();
+  const labels: LabelState[] = [];
+  
+  analysis.items.forEach((item) => {
+      const nameKey = item.name.toLowerCase().trim();
+      if (seenNames.has(nameKey)) return;
+      seenNames.add(nameKey);
+      
+      const idx = labels.length; // New index for the label array
+      
+      let cx = 0.5;
+      let cy = 0.5;
+      if (item.box_2d && item.box_2d.length === 4) {
+        const [ymin, xmin, ymax, xmax] = item.box_2d;
+        cx = (xmin + xmax) / 2 / 1000;
+        cy = (ymin + ymax) / 2 / 1000;
+      }
 
-    return {
-      id: idx,
-      text: item.name,
-      x: cx,
-      y: Math.max(0.05, cy - 0.15),
-      anchorX: cx,
-      anchorY: cy,
-      scale: defaultLabelScale,
-      visible: true,
-      style: defaultLabelStyle
-    };
+      labels.push({
+        id: idx,
+        text: item.name,
+        x: cx,
+        y: Math.max(0.05, cy - 0.15),
+        anchorX: cx,
+        anchorY: cy,
+        scale: defaultLabelScale,
+        visible: true,
+        style: defaultLabelStyle
+      });
   });
+
+  // If we have a single item result, add the health tag as a separate label below the main one
+  if (labels.length === 1 && analysis.healthTag) {
+     const mainLabel = labels[0];
+     labels.push({
+        id: 9999, // Unique ID for the health tag
+        text: `✨ ${analysis.healthTag}`,
+        x: mainLabel.x,
+        y: mainLabel.y + 0.12, // Position roughly below the main label
+        anchorX: mainLabel.anchorX,
+        anchorY: mainLabel.anchorY,
+        scale: defaultLabelScale * 0.75, // Slightly smaller
+        visible: true,
+        style: 'pill' // Default to pill for clarity
+     });
+  }
 
   return { mealType, card, labels };
 };
