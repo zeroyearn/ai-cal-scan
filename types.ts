@@ -30,10 +30,13 @@ export interface ElementState {
   visible: boolean;
 }
 
+export type LabelStyle = 'default' | 'pill' | 'text';
+
 export interface LabelState extends ElementState {
   id: number; // Index of the food item
   anchorX: number; // Percentage 0-1 (Fixed point on food)
   anchorY: number; // Percentage 0-1
+  style: LabelStyle;
 }
 
 export interface ImageLayout {
@@ -54,4 +57,14 @@ export interface ProcessedImage {
   resultUrl?: string; // The flattened result (generated from layout)
   error?: string;
   driveFileId?: string; // ID of the original file if imported from Google Drive
+}
+
+export interface HitRegion {
+  id: number | string;
+  type: 'card' | 'title' | 'label';
+  x: number; // Pixel X on canvas
+  y: number; // Pixel Y on canvas
+  w: number; // Width in pixels
+  h: number; // Height in pixels
+  rotation?: number;
 }

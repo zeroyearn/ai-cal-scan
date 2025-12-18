@@ -1,100 +1,120 @@
-import { FoodAnalysis, ImageLayout, LabelState, ElementState } from "../types";
+import { FoodAnalysis, ImageLayout, HitRegion, ElementState, LabelState } from "../types";
 
 // --- Constants for Scale Calibration ---
-// These factors calibrate the "User Scale" (e.g. 7.6) to the "Canvas Scale".
-// This allows 760% to be a user-friendly number while keeping the drawing logic consistent.
+// These factors calibrate the "User Scale" to the "Canvas Scale".
+// Unified across preview and export.
 const TITLE_SCALE_MODIFIER = 0.15;
 const CARD_SCALE_MODIFIER = 0.25;
 
-// --- Asset Generators (Create Sprites for the Editor) ---
+// --- Main Drawing Logic (Shared by Preview and Export) ---
 
 /**
- * Generates a transparent PNG blob url for the Nutrition Card.
- * This allows the React UI to display it as a draggable <img>.
+ * Draws the entire scene (background image + overlays) onto the provided context.
+ * Returns a list of HitRegions for the UI to generate interactive overlays.
  */
-export const generateCardSprite = async (analysis: FoodAnalysis): Promise<string> => {
-  const canvas = document.createElement("canvas");
-  // High resolution for crisp UI (Scale 2.0 relative to Base Dimensions)
-  const scale = 2.0; 
-  // Base dimensions (Compact Version)
-  const baseW = 540;
-  const headerH = 70;
-  const baseH = 260;
-  const cardH = baseH + headerH;
-  
-  // Padding to prevent shadow clipping (Shadow Blur 20 * Scale 2 = 40px)
-  const padding = 40;
+export const drawScene = (
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | null, // Pass null if you only want to draw overlays (transparent bg)
+  analysis: FoodAnalysis,
+  layout: ImageLayout
+): HitRegion[] => {
+  const width = ctx.canvas.width;
+  const height = ctx.canvas.height;
+  const hitRegions: HitRegion[] = [];
 
-  canvas.width = baseW * scale + padding * 2;
-  canvas.height = cardH * scale + padding * 2; 
+  // 1. Draw Background
+  if (img) {
+    ctx.drawImage(img, 0, 0, width, height);
+  }
 
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "";
+  // Base scale relative to a 1200px wide reference image
+  // This ensures elements look the same relative size regardless of resolution
+  const refScale = width / 1200;
 
-  // Draw with offset to capture top/left shadows
-  drawNutritionCardInternal(ctx, analysis, padding, padding, scale);
-  
-  return canvas.toDataURL("image/png");
+  // 2. Draw Meal Type
+  if (layout.mealType.visible) {
+    const x = layout.mealType.x * width;
+    // Apply Modifier
+    const s = layout.mealType.scale * refScale * TITLE_SCALE_MODIFIER;
+    // Text offset adjustment (centering) is handled in draw function, 
+    // but the layout.y is the top-center anchor.
+    const y = layout.mealType.y * height;
+    
+    const bounds = drawMealTypeInternal(ctx, layout.mealType.text || analysis.mealType, x, y, s);
+    hitRegions.push({
+      id: 'title',
+      type: 'title',
+      ...bounds
+    });
+  }
+
+  // 3. Draw Labels & Lines
+  layout.labels.forEach(label => {
+    if (!label.visible) return;
+    
+    const pillX = label.x * width;
+    const pillY = label.y * height;
+    const anchorX = label.anchorX * width;
+    const anchorY = label.anchorY * height;
+    const s = label.scale * refScale; // No modifier for labels
+    const text = label.text || "";
+
+    // Draw Line & Dot (Only for 'default' style)
+    if (label.style === 'default') {
+      ctx.beginPath();
+      ctx.moveTo(anchorX, anchorY);
+      ctx.lineTo(pillX, pillY); 
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+      ctx.lineWidth = 3 * s;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(anchorX, anchorY, 6 * s, 0, Math.PI * 2);
+      ctx.fillStyle = "white";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.3)";
+      ctx.lineWidth = 2 * s;
+      ctx.stroke();
+    }
+
+    let bounds;
+    // Draw Label Content
+    if (label.style === 'text') {
+       bounds = drawLabelTextOnlyInternal(ctx, text, pillX, pillY, s);
+    } else {
+       // 'default' and 'pill' use the pill look
+       bounds = drawLabelPillInternal(ctx, text, pillX, pillY, s);
+    }
+
+    hitRegions.push({
+      id: label.id,
+      type: 'label',
+      ...bounds
+    });
+  });
+
+  // 4. Draw Nutrition Card
+  if (layout.card.visible) {
+    const s = layout.card.scale * refScale * CARD_SCALE_MODIFIER;
+    const x = layout.card.x * width;
+    const y = layout.card.y * height;
+    
+    const bounds = drawNutritionCardInternal(ctx, analysis, x, y, s);
+    hitRegions.push({
+      id: 'card',
+      type: 'card',
+      ...bounds
+    });
+  }
+
+  return hitRegions;
 };
+
 
 /**
- * Generates a transparent PNG blob url for a Food Label Pill.
+ * Generates the final high-res image for export.
+ * Uses the exact same drawScene logic as the preview.
  */
-export const generateLabelSprite = async (text: string): Promise<string> => {
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "";
-
-  // Temporary font setup to measure
-  const fontSize = 28 * 2; // High res
-  ctx.font = `600 ${fontSize}px Inter, sans-serif`;
-  const metrics = ctx.measureText(text);
-  
-  const paddingX = 16 * 2;
-  // const paddingY = 10 * 2;
-  const w = metrics.width + paddingX * 2;
-  const h = fontSize * 1.6;
-  
-  // Add shadow buffer
-  canvas.width = w + 40;
-  canvas.height = h + 40;
-
-  // Re-get context after resize (safeguard)
-  const ctx2 = canvas.getContext("2d")!;
-  ctx2.font = `600 ${fontSize}px Inter, sans-serif`;
-  
-  drawLabelPillInternal(ctx2, text, 20, 20, 2.0); // Offset 20 for shadow buffer
-
-  return canvas.toDataURL("image/png");
-};
-
-/**
- * Generates a transparent PNG blob url for the Meal Title.
- */
-export const generateTitleSprite = async (text: string): Promise<string> => {
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  if(!ctx) return "";
-
-  const fontSize = 80 * 2;
-  ctx.font = `bold ${fontSize}px Inter, sans-serif`;
-  const metrics = ctx.measureText(text);
-  
-  const padding = 40; // Shadow buffer
-
-  canvas.width = metrics.width + padding * 2;
-  canvas.height = fontSize * 1.5 + padding * 2;
-  
-  const ctx2 = canvas.getContext("2d")!;
-  // Center X, Offset Y
-  drawMealTypeInternal(ctx2, text, canvas.width/2, padding, 2.0);
-
-  return canvas.toDataURL("image/png");
-};
-
-
-// --- Main Rendering (Final Export) ---
-
 export const renderFinalImage = async (
   base64Image: string,
   analysis: FoodAnalysis,
@@ -110,208 +130,36 @@ export const renderFinalImage = async (
       const ctx = canvas.getContext("2d");
       if (!ctx) { reject("No Context"); return; }
 
-      // 1. Draw Background
-      ctx.drawImage(img, 0, 0);
-
-      // Base scale relative to a 1200px wide reference image
-      const refScale = canvas.width / 1200;
-
-      // 2. Draw Meal Type
-      if (layout.mealType.visible) {
-        const x = layout.mealType.x * canvas.width;
-        // Apply Modifier to User Scale to get Effective Scale
-        const s = layout.mealType.scale * refScale * TITLE_SCALE_MODIFIER;
-        
-        // Adjust Y for padding used in Sprite (40px at Scale 2.0). 
-        // Logic: 40px * (s / 2.0) = 20 * s.
-        const y = layout.mealType.y * canvas.height + (20 * s); 
-        
-        drawMealTypeInternal(ctx, layout.mealType.text || analysis.mealType, x, y, s);
-      }
-
-      // 3. Draw Labels & Lines
-      layout.labels.forEach(label => {
-        if (!label.visible) return;
-        
-        const pillX = label.x * canvas.width;
-        const pillY = label.y * canvas.height;
-        const anchorX = label.anchorX * canvas.width;
-        const anchorY = label.anchorY * canvas.height;
-        const s = label.scale * refScale; // No modifier for labels
-        const text = label.text || "";
-
-        // Draw Line
-        ctx.beginPath();
-        ctx.moveTo(anchorX, anchorY);
-        ctx.lineTo(pillX, pillY); 
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-        ctx.lineWidth = 3 * s;
-        ctx.stroke();
-
-        // Draw Anchor Dot
-        ctx.beginPath();
-        ctx.arc(anchorX, anchorY, 6 * s, 0, Math.PI * 2);
-        ctx.fillStyle = "white";
-        ctx.fill();
-        ctx.strokeStyle = "rgba(0,0,0,0.3)";
-        ctx.lineWidth = 2 * s;
-        ctx.stroke();
-
-        // Draw Pill
-        const { w, h } = measureLabel(ctx, text, s);
-        drawLabelPillInternal(ctx, text, pillX - w/2, pillY - h/2, s);
-      });
-
-      // 4. Draw Nutrition Card
-      if (layout.card.visible) {
-        // Adjust Position for Shadow Padding used in Sprite
-        const s = layout.card.scale * refScale * CARD_SCALE_MODIFIER;
-        
-        // Sprite Padding was 40px at Scale 2.0.
-        // Effective offset = 40 * (s / 2.0) = 20 * s.
-        // Layout X/Y corresponds to the top-left of the Sprite (Shadow Buffer).
-        // Actual Card Content needs to be drawn shifted by this offset.
-        const offsetX = 20 * s;
-        const offsetY = 20 * s;
-
-        const x = layout.card.x * canvas.width + offsetX;
-        const y = layout.card.y * canvas.height + offsetY;
-        
-        drawNutritionCardInternal(ctx, analysis, x, y, s);
-      }
+      // Use the unified drawing function
+      drawScene(ctx, img, analysis, layout);
 
       resolve(canvas.toDataURL("image/jpeg", 0.9));
     };
+    img.onerror = reject;
   });
 };
 
 
-// --- Layout Helpers ---
+// --- Internal Drawing Functions (Returns Bounding Box for Hit Testing) ---
 
-export const getInitialLayout = (
-  imgWidth: number, 
-  imgHeight: number, 
-  analysis: FoodAnalysis
-): ImageLayout => {
-  // Meal Type: Top Center
-  // Default Scale 760% -> 7.6
-  const mealType: ElementState = {
-    x: 0.5,
-    y: 0.08,
-    scale: 7.6, 
-    text: analysis.mealType,
-    visible: true
-  };
-
-  // Card: Bottom Left
-  // Default Scale 420% -> 4.2
-  const defaultCardScale = 4.2;
-  
-  // Card dimensions logic
-  // CHANGED: Use imgWidth only. Previous use of Math.max caused scaling mismatch on portrait images.
-  const cardScaleRef = imgWidth / 1200;
-  
-  // Calculate height with default scale AND Modifier
-  // Base H (330) * Ref * (UserScale * Modifier)
-  const cardH_px = (260 + 70) * cardScaleRef * (defaultCardScale * CARD_SCALE_MODIFIER);
-  
-  // Margin 32px
-  const margin_px = 32 * cardScaleRef;
-  
-  // Calculate X. Note: Since we use padded sprites, the layout x is top-left of the padding.
-  // The content starts ~20px inside (relative to scale).
-  // We can reduce margin slightly to keep visual alignment similar.
-  const visualMarginX = Math.max(0, margin_px - (20 * (defaultCardScale * cardScaleRef * CARD_SCALE_MODIFIER)));
-  const cardX = visualMarginX / imgWidth;
-  
-  // Position it at bottom with margin
-  let cardY = (imgHeight - cardH_px - margin_px) / imgHeight;
-  
-  // Safety check
-  if (cardY < 0) cardY = 0.05;
-
-  const card: ElementState = {
-    x: cardX,
-    y: cardY,
-    scale: defaultCardScale,
-    visible: true
-  };
-
-  // Labels
-  const labels: LabelState[] = analysis.items.map((item, idx) => {
-    let cx = 0.5;
-    let cy = 0.5;
-    if (item.box_2d && item.box_2d.length === 4) {
-      const [ymin, xmin, ymax, xmax] = item.box_2d;
-      cx = (xmin + xmax) / 2 / 1000;
-      cy = (ymin + ymax) / 2 / 1000;
-    }
-
-    return {
-      id: idx,
-      text: item.name,
-      x: cx,
-      y: Math.max(0.05, cy - 0.15),
-      anchorX: cx,
-      anchorY: cy,
-      scale: 1.0,
-      visible: true
-    };
-  });
-
-  return { mealType, card, labels };
-};
-
-export const resizeImage = async (file: File, maxDimension: number = 1024): Promise<{ base64: string, mimeType: string }> => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      const objectUrl = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(objectUrl);
-        let width = img.width;
-        let height = img.height;
-        if (width > maxDimension || height > maxDimension) {
-          if (width > height) {
-            height = Math.round((height * maxDimension) / width);
-            width = maxDimension;
-          } else {
-            width = Math.round((width * maxDimension) / height);
-            height = maxDimension;
-          }
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) { reject(new Error("Could not get canvas context")); return; }
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
-        const base64 = dataUrl.split(",")[1];
-        resolve({ base64, mimeType: "image/jpeg" });
-      };
-      img.onerror = (e) => { URL.revokeObjectURL(objectUrl); reject(e); };
-      img.src = objectUrl;
-    });
-  };
-
-// --- Internal Drawing Functions (Used by both Sprites and Final Render) ---
-// Note: These functions use "Base Dimensions" (e.g. 540px card width, 80px font).
-// The modifiers above scale the User input down to these base dimensions appropriately.
-
-function measureLabel(ctx: CanvasRenderingContext2D, text: string, scale: number) {
+function measureLabelText(ctx: CanvasRenderingContext2D, text: string, scale: number, isTextOnly: boolean) {
     const fontSize = 28 * scale;
-    ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+    ctx.font = isTextOnly 
+      ? `800 ${fontSize}px Inter, sans-serif`
+      : `600 ${fontSize}px Inter, sans-serif`;
+    
     const metrics = ctx.measureText(text);
-    const paddingX = 16 * scale;
-    // const paddingY = 10 * scale;
+    const paddingX = isTextOnly ? 4 * scale : 16 * scale;
     const w = metrics.width + (paddingX * 2);
     const h = fontSize * 1.6;
     return { w, h };
 }
 
-function drawLabelPillInternal(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, scale: number) {
-  const { w, h } = measureLabel(ctx, text, scale);
+function drawLabelPillInternal(ctx: CanvasRenderingContext2D, text: string, centerX: number, centerY: number, scale: number) {
+  const { w, h } = measureLabelText(ctx, text, scale, false);
   const r = h / 2;
+  const x = centerX - w / 2;
+  const y = centerY - h / 2;
 
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.3)";
@@ -330,31 +178,77 @@ function drawLabelPillInternal(ctx: CanvasRenderingContext2D, text: string, x: n
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#111827";
-  ctx.fillText(text, x + w/2, y + h/2);
+  ctx.fillText(text, centerX, centerY);
+
+  return { x, y, w, h };
 }
 
-function drawMealTypeInternal(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, scale: number) {
+function drawLabelTextOnlyInternal(ctx: CanvasRenderingContext2D, text: string, centerX: number, centerY: number, scale: number) {
+  const { w, h } = measureLabelText(ctx, text, scale, true);
+  const x = centerX - w / 2;
+  const y = centerY - h / 2;
+  
+  ctx.save();
+  const fontSize = 28 * scale;
+  ctx.font = `800 ${fontSize}px Inter, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  
+  // Thick Outline
+  ctx.lineWidth = 4 * scale;
+  ctx.strokeStyle = "rgba(0,0,0,0.8)";
+  ctx.lineJoin = "round";
+  ctx.miterLimit = 2;
+  ctx.strokeText(text, centerX, centerY);
+
+  // Soft Shadow
+  ctx.shadowColor = "rgba(0,0,0,0.6)";
+  ctx.shadowBlur = 6 * scale;
+  ctx.shadowOffsetY = 2 * scale;
+  
+  // Main Text
+  ctx.fillStyle = "white";
+  ctx.fillText(text, centerX, centerY);
+  
+  ctx.restore();
+
+  return { x, y, w, h };
+}
+
+function drawMealTypeInternal(ctx: CanvasRenderingContext2D, text: string, centerX: number, topY: number, scale: number) {
   const fontSize = 80 * scale;
   ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+  const metrics = ctx.measureText(text);
+  const w = metrics.width;
+  const h = fontSize; 
+  const x = centerX - w/2;
+  const y = topY;
+
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
 
+  ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.5)";
   ctx.shadowBlur = 10 * scale;
   ctx.shadowOffsetY = 2 * scale;
 
   ctx.fillStyle = "white";
-  ctx.fillText(text, x, y);
-  
-  ctx.shadowColor = "transparent";
+  ctx.fillText(text, centerX, topY);
+  ctx.restore();
+
+  return { x, y, w, h };
 }
 
-function drawNutritionCardInternal(ctx: CanvasRenderingContext2D, analysis: FoodAnalysis, x: number, y: number, scale: number) {
+function drawNutritionCardInternal(ctx: CanvasRenderingContext2D, analysis: FoodAnalysis, leftX: number, topY: number, scale: number) {
   const cardW = 540 * scale; 
   const headerH = 70 * scale; 
   const baseH = 260 * scale;
   const cardH = baseH + headerH; 
   const r = 24 * scale;
+  
+  // Drawing coords
+  const x = leftX;
+  const y = topY;
 
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.15)";
@@ -460,6 +354,8 @@ function drawNutritionCardInternal(ctx: CanvasRenderingContext2D, analysis: Food
   drawNewMacroCard(ctx, "Fat", analysis.nutrition.fat, "🥩", "#fef2f2", "#dc2626", x + paddingX + (macroW + gap) * 2, macroY, macroW, macroH, scale);
 
   ctx.restore();
+
+  return { x, y, w: cardW, h: cardH };
 }
 
 function drawCardBranding(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
@@ -476,7 +372,7 @@ function drawCardBranding(ctx: CanvasRenderingContext2D, x: number, y: number, s
   const bPad = 8 * scale;
   
   ctx.beginPath(); ctx.moveTo(x + bPad, y + bPad + bLen); ctx.quadraticCurveTo(x + bPad, y + bPad, x + bPad + bLen, y + bPad); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x + logoSize - bPad - bLen, y + bPad); ctx.quadraticCurveTo(x + logoSize - bPad, y + bPad, x + logoSize - bPad, y + bPad + bLen); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x + logoSize - bPad - bLen, y + bPad); ctx.quadraticCurveTo(x + logoSize - bPad, y + logoSize - bPad, x + logoSize - bPad + bLen, y + bPad); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(x + logoSize - bPad, y + logoSize - bPad - bLen); ctx.quadraticCurveTo(x + logoSize - bPad, y + logoSize - bPad, x + logoSize - bPad - bLen, y + logoSize - bPad); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(x + bPad + bLen, y + logoSize - bPad); ctx.quadraticCurveTo(x + bPad, y + logoSize - bPad, x + bPad, y + logoSize - bPad - bLen); ctx.stroke();
 
@@ -540,3 +436,104 @@ function drawNewMacroCard(ctx: CanvasRenderingContext2D, label: string, value: s
   ctx.textBaseline = "middle";
   ctx.fillText(value, x + w/2, y + h - 20 * scale);
 }
+
+// --- Layout Helpers (Unchanged) ---
+
+export const getInitialLayout = (
+  imgWidth: number, 
+  imgHeight: number, 
+  analysis: FoodAnalysis
+): ImageLayout => {
+  // Meal Type: Top Center
+  // Default Scale 760% -> 7.6
+  const mealType: ElementState = {
+    x: 0.5,
+    y: 0.08,
+    scale: 7.6, 
+    text: analysis.mealType,
+    visible: true
+  };
+
+  // Card: Bottom Left
+  // Default Scale 420% -> 4.2
+  const defaultCardScale = 4.2;
+  const cardScaleRef = imgWidth / 1200;
+  
+  // Calculate height with default scale AND Modifier
+  const cardH_px = (260 + 70) * cardScaleRef * (defaultCardScale * CARD_SCALE_MODIFIER);
+  
+  // Margin 32px
+  const margin_px = 32 * cardScaleRef;
+  const visualMarginX = Math.max(0, margin_px); // Simplified margin calc
+  const cardX = visualMarginX / imgWidth;
+  
+  // Position it at bottom with margin
+  let cardY = (imgHeight - cardH_px - margin_px) / imgHeight;
+  
+  // Safety check
+  if (cardY < 0) cardY = 0.05;
+
+  const card: ElementState = {
+    x: cardX,
+    y: cardY,
+    scale: defaultCardScale,
+    visible: true
+  };
+
+  // Labels
+  const labels: LabelState[] = analysis.items.map((item, idx) => {
+    let cx = 0.5;
+    let cy = 0.5;
+    if (item.box_2d && item.box_2d.length === 4) {
+      const [ymin, xmin, ymax, xmax] = item.box_2d;
+      cx = (xmin + xmax) / 2 / 1000;
+      cy = (ymin + ymax) / 2 / 1000;
+    }
+
+    return {
+      id: idx,
+      text: item.name,
+      x: cx,
+      y: Math.max(0.05, cy - 0.15),
+      anchorX: cx,
+      anchorY: cy,
+      scale: 1.0,
+      visible: true,
+      style: 'default' // Default style: Line + Pill
+    };
+  });
+
+  return { mealType, card, labels };
+};
+
+export const resizeImage = async (file: File, maxDimension: number = 1024): Promise<{ base64: string, mimeType: string }> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { reject(new Error("Could not get canvas context")); return; }
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+        const base64 = dataUrl.split(",")[1];
+        resolve({ base64, mimeType: "image/jpeg" });
+      };
+      img.onerror = (e) => { URL.revokeObjectURL(objectUrl); reject(e); };
+      img.src = objectUrl;
+    });
+  };
