@@ -1,3 +1,4 @@
+
 export interface FoodItem {
   name: string;
   box_2d: number[]; // [ymin, xmin, ymax, xmax] 0-1000 scale
@@ -45,6 +46,7 @@ export interface ImageLayout {
   card: ElementState;
   mealType: ElementState;
   labels: LabelState[];
+  caption?: ElementState; // New: For Viral Text
 }
 
 export interface LayoutConfig {
@@ -68,19 +70,15 @@ export interface ProcessedImage {
   resultUrl?: string; // The flattened result (generated from layout)
   error?: string;
   driveFileId?: string; // ID of the original file if imported from Google Drive
+  viralStep?: number; // 1-6 for the Viral Story Mode
 }
 
 export interface HitRegion {
   id: number | string;
-  type: 'card' | 'title' | 'label';
+  type: 'card' | 'title' | 'label' | 'caption';
   x: number; // Pixel X on canvas
   y: number; // Pixel Y on canvas
   w: number; // Width in pixels
   h: number; // Height in pixels
   rotation?: number;
-}
-
-export interface CollageLabel {
-  name: string;
-  calories: string;
 }

@@ -1,5 +1,6 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
-import { FoodAnalysis, CollageLabel } from "../types";
+import { FoodAnalysis } from "../types";
 
 // The analysis schema for the model's response in JSON format.
 const analysisSchema = {
@@ -40,21 +41,10 @@ const analysisSchema = {
   required: ["isFood", "hasExistingText", "items", "nutrition", "mealType", "summary"],
 };
 
-const collageSchema = {
-  type: Type.OBJECT,
-  description: "The single main food item depicted in the collage.",
-  properties: {
-    name: { type: Type.STRING, description: "The common name of the food item visible in all images (e.g. 'Ginger Tea')." },
-    calories: { type: Type.STRING, description: "Estimated calories (e.g. '50 kcal')." },
-  },
-  required: ["name", "calories"]
-};
-
 // Helper function to handle exponential backoff for API rate limits.
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function getClient(apiKey?: string, baseUrl?: string) {
-  // Prioritize provided key (for third-party proxies) or fallback to system environment variable.
   const effectiveKey = apiKey || process.env.API_KEY;
   if (!effectiveKey) {
     throw new Error("Gemini API Key is missing. Please configure it in Settings.");
@@ -62,16 +52,12 @@ function getClient(apiKey?: string, baseUrl?: string) {
 
   const clientConfig: any = { apiKey: effectiveKey };
   
-  // Handle custom Base URL for aggregate APIs
   if (baseUrl && baseUrl.trim().length > 0) {
     let url = baseUrl.trim();
-    if (url.endsWith('/')) {
-      url = url.slice(0, -1);
-    }
+    if (url.endsWith('/')) url = url.slice(0, -1);
     clientConfig.baseUrl = url;
   }
 
-  // Aggregated APIs often need Bearer token authorization.
   clientConfig.customHeaders = {
     'Authorization': `Bearer ${effectiveKey}`
   };
@@ -92,17 +78,11 @@ export async function analyzeFoodImage(
 
   while (attempt <= maxRetries) {
     try {
-      // Use gemini-3-flash-preview as the default model.
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: {
           parts: [
-            {
-              inlineData: {
-                mimeType: mimeType,
-                data: base64Image,
-              },
-            },
+            { inlineData: { mimeType: mimeType, data: base64Image } },
             {
               text: `Analyze this image for a bulk food processing tool.
               1. **Verification**: Determine if the *main subject* is real food. If it is a menu, a recipe book, a human face, an empty plate, or just a wrapper, set 'isFood' to false.
@@ -116,72 +96,70 @@ export async function analyzeFoodImage(
         config: {
           responseMimeType: "application/json",
           responseSchema: analysisSchema,
-          systemInstruction: "You are a rigid food analysis AI. You flag images with existing text overlays and reject non-food images. Provide health scores for valid food. Do not output duplicate food items.",
+          systemInstruction: "You are a rigid food analysis AI. You flag images with existing text overlays and reject non-food images. Provide health scores for valid food.",
         },
       });
 
-      if (!response.text) {
-        throw new Error("No response from Gemini");
-      }
-
-      const data = JSON.parse(response.text) as FoodAnalysis;
-      return data;
+      if (!response.text) throw new Error("No response from Gemini");
+      return JSON.parse(response.text) as FoodAnalysis;
 
     } catch (error: any) {
       attempt++;
-      
-      const isOverloaded = 
-        error?.status === 503 || 
-        error?.status === 429 || 
-        error?.message?.includes('503') || 
-        error?.message?.includes('429') || 
-        error?.message?.toLowerCase().includes('overloaded') ||
-        error?.message?.toLowerCase().includes('unavailable') ||
-        error?.message?.toLowerCase().includes('quota');
-
-      if (isOverloaded && attempt <= maxRetries) {
-        const waitTime = Math.pow(2, attempt - 1) * 1000;
-        console.warn(`Gemini API Busy/Rate Limit (${error.status || 'Error'}). Retrying in ${waitTime}ms... (Attempt ${attempt}/${maxRetries})`);
-        await delay(waitTime);
+      if (shouldRetry(error) && attempt <= maxRetries) {
+        await delay(Math.pow(2, attempt - 1) * 1000);
         continue;
       }
-
       console.error("Gemini Analysis Error:", error);
       throw error;
     }
   }
-  
-  throw new Error("Failed to analyze image after multiple retries due to server overload.");
+  throw new Error("Failed to analyze image after multiple retries.");
 }
 
-export async function analyzeCollage(
-  base64Image: string, 
-  apiKey?: string, 
-  baseUrl?: string
-): Promise<CollageLabel> {
-  const ai = getClient(apiKey, baseUrl);
-  
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: {
-        parts: [
-          { inlineData: { mimeType: "image/jpeg", data: base64Image } },
-          { text: "Analyze this 2x2 collage. All 4 images depict the same food item or theme. Identify the SINGLE main food name (max 3 words) and estimated calories." }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: collageSchema
-      }
-    });
+// New function for Viral Caption Generation
+export async function generateViralCaption(
+    base64Image: string,
+    mimeType: string,
+    formula: string,
+    apiKey?: string,
+    baseUrl?: string
+): Promise<string> {
+    const ai = getClient(apiKey, baseUrl);
+    
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: mimeType, data: base64Image } },
+                    { text: `Identify the visual elements in this image and complete the following specific viral content formula.
+                    
+                    FORMULA TEMPLATE:
+                    "${formula}"
+                    
+                    INSTRUCTIONS:
+                    1. Replace the [bracketed placeholders] with specific details visible in the image or implied context.
+                    2. Keep the tone emotional, urgent, or authoritative as implied by the formula.
+                    3. Do NOT output the instructions, only the final completed text.
+                    4. If the formula has numbers (e.g. "1.", "2."), keep them.
+                    5. Language: Chinese (Simplified).
+                    ` }
+                ]
+            }
+        });
+        return response.text?.trim() || "Generated caption failed.";
+    } catch (error) {
+        console.error("Viral Caption Error:", error);
+        return "Caption generation failed.";
+    }
+}
 
-    if (!response.text) throw new Error("No response");
-    const data = JSON.parse(response.text) as CollageLabel;
-    return data;
-
-  } catch (e) {
-    console.error("Collage Analysis Error", e);
-    return { name: "", calories: "" };
-  }
+function shouldRetry(error: any) {
+    return error?.status === 503 || 
+           error?.status === 429 || 
+           error?.message?.includes('503') || 
+           error?.message?.includes('429') || 
+           error?.message?.toLowerCase().includes('overloaded') ||
+           error?.message?.toLowerCase().includes('unavailable') ||
+           error?.message?.toLowerCase().includes('quota');
 }
