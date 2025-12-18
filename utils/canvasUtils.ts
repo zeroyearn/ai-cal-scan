@@ -510,7 +510,7 @@ export const getInitialLayout = (
   return { mealType, card, labels };
 };
 
-export const resizeImage = async (file: File, maxDimension: number = 1024): Promise<{ base64: string, mimeType: string }> => {
+export const resizeImage = async (file: File, maxDimension: number = 1024, cropTo9_16: boolean = false): Promise<{ base64: string, mimeType: string }> => {
     return new Promise((resolve, reject) => {
       const img = new Image();
       const objectUrl = URL.createObjectURL(file);
@@ -518,22 +518,56 @@ export const resizeImage = async (file: File, maxDimension: number = 1024): Prom
         URL.revokeObjectURL(objectUrl);
         let width = img.width;
         let height = img.height;
-        if (width > maxDimension || height > maxDimension) {
-          if (width > height) {
-            height = Math.round((height * maxDimension) / width);
-            width = maxDimension;
+        
+        let sx = 0, sy = 0, sWidth = width, sHeight = height;
+
+        if (cropTo9_16) {
+             const targetRatio = 9 / 16;
+             const currentRatio = width / height;
+             
+             if (currentRatio > targetRatio) {
+                 // Too wide
+                 sWidth = height * targetRatio;
+                 sHeight = height;
+                 sx = (width - sWidth) / 2;
+             } else {
+                 // Too tall
+                 sWidth = width;
+                 sHeight = width / targetRatio;
+                 sy = (height - sHeight) / 2;
+             }
+        }
+
+        // Resize logic (on the cropped area)
+        let dWidth = sWidth;
+        let dHeight = sHeight;
+
+        if (dWidth > maxDimension || dHeight > maxDimension) {
+          if (dWidth > dHeight) {
+            dHeight = Math.round((dHeight * maxDimension) / dWidth);
+            dWidth = maxDimension;
           } else {
-            width = Math.round((width * maxDimension) / height);
-            height = maxDimension;
+            dWidth = Math.round((dWidth * maxDimension) / dHeight);
+            dHeight = maxDimension;
           }
         }
+        
+        // Ensure integer dimensions
+        dWidth = Math.floor(dWidth);
+        dHeight = Math.floor(dHeight);
+
         const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = dWidth;
+        canvas.height = dHeight;
         const ctx = canvas.getContext("2d");
         if (!ctx) { reject(new Error("Could not get canvas context")); return; }
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+        
+        // Enable high quality image scaling
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, dWidth, dHeight);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
         const base64 = dataUrl.split(",")[1];
         resolve({ base64, mimeType: "image/jpeg" });
       };

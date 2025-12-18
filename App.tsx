@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion } from './types';
 import { analyzeFoodImage } from './services/geminiService';
 import { resizeImage, getInitialLayout, drawScene, renderFinalImage } from './utils/canvasUtils';
@@ -38,6 +38,8 @@ function App() {
   const [batchSelection, setBatchSelection] = useState<Set<string>>(new Set());
   const [exportTag, setExportTag] = useState("Food");
   const [deleteAfterSave, setDeleteAfterSave] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [autoCrop, setAutoCrop] = useState(false);
 
   // Gemini Settings
   const [geminiApiKey, setGeminiApiKey] = useState(process.env.API_KEY || "");
@@ -486,7 +488,9 @@ function App() {
     const processSingleImage = async (imgData: ProcessedImage) => {
         try {
             setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'analyzing' } : p));
-            const { base64: base64Data, mimeType } = await resizeImage(imgData.file);
+            // PASS autoCrop here to resizeImage
+            const { base64: base64Data, mimeType } = await resizeImage(imgData.file, 1024, autoCrop);
+            
             const correctedPreviewUrl = `data:${mimeType};base64,${base64Data}`;
             const analysis = await analyzeFoodImage(base64Data, mimeType, geminiApiKey, geminiApiUrl);
             if (!analysis.isFood) {
@@ -784,11 +788,23 @@ function App() {
             </div>
             <div className="flex gap-2">
                 <button onClick={handleDriveImport} disabled={isDriveLoading} className="flex-1 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 font-medium py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-sm">{isDriveLoading ? <Loader2 className="animate-spin" size={18} /> : <Cloud size={18} />}<span>Import from Google Drive</span></button>
-                <button onClick={() => setShowDriveSettings(true)} className="bg-white border border-gray-300 text-gray-500 hover:text-gray-700 hover:bg-gray-50 p-2.5 rounded-xl shadow-sm transition-colors"><Settings size={20} /></button>
+                <button onClick={() => setShowDriveSettings(true)} className="bg-white border border-gray-300 text-gray-500 hover:text-gray-700 hover:bg-gray-50 p-2.5 rounded-xl shadow-sm transition-colors" title="Settings"><Settings size={20} /></button>
+                <button onClick={() => setShowHelp(true)} className="bg-white border border-gray-300 text-gray-500 hover:text-gray-700 hover:bg-gray-50 p-2.5 rounded-xl shadow-sm transition-colors" title="Usage Guide"><BookOpen size={20} /></button>
             </div>
           </div>
           <div className="flex flex-col px-6 py-4 border-b border-gray-100 bg-gray-50/50 gap-3">
             <div className="flex justify-between items-center"><span className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Queue ({images.length})</span><button onClick={toggleSelectAll} className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors" disabled={images.length === 0}>{batchSelection.size === images.length && images.length > 0 ? 'Deselect All' : 'Select All'}</button></div>
+            
+             <div className="flex items-center justify-between bg-white border border-gray-200 p-2 rounded-lg cursor-pointer hover:border-gray-300 transition-colors" onClick={() => setAutoCrop(!autoCrop)}>
+                <div className="flex items-center gap-2 text-sm text-gray-700">
+                    <Crop size={16} className={autoCrop ? "text-pink-500" : "text-gray-400"} />
+                    <span className={autoCrop ? "font-medium text-gray-900" : "text-gray-500"}>Crop to TikTok (9:16)</span>
+                </div>
+                <div className={`w-8 h-4 rounded-full relative transition-colors ${autoCrop ? 'bg-pink-500' : 'bg-gray-300'}`}>
+                    <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all shadow-sm`} style={{left: autoCrop ? 'calc(100% - 14px)' : '2px'}}></div>
+                </div>
+            </div>
+
             {batchSelection.size > 0 && <div className="flex flex-col gap-2 animate-in slide-in-from-top-2 duration-200"><div className="flex items-center gap-2"><Tag size={14} className="text-gray-400" /><input type="text" value={exportTag} onChange={(e) => setExportTag(e.target.value)} className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:border-black focus:ring-1 focus:ring-black outline-none" placeholder="Style Tag" /></div><button onClick={handleBatchSaveToDrive} disabled={isUploading} className="w-full flex items-center justify-center gap-2 bg-black text-white py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors shadow-sm">{isUploading ? <Loader2 className="animate-spin" size={14}/> : <CloudUpload size={14} />}Save {batchSelection.size} to Drive</button></div>}
           </div>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
@@ -996,6 +1012,78 @@ function App() {
                 </div>
             </div>
             <div className="mt-8 flex justify-end"><button onClick={saveSettings} className="bg-black text-white px-5 py-2 rounded-lg hover:bg-gray-800 transition-colors font-medium">Save & Close</button></div>
+          </div>
+        </div>
+      )}
+      
+      {showHelp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-8 animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                <BookOpen size={24} className="text-blue-600" /> AI Cal 使用指南
+              </h2>
+              <button onClick={() => setShowHelp(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="prose prose-sm prose-gray max-w-none space-y-6 text-gray-600">
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">1. 登录与访问</h3>
+                <p>首次访问请输入默认安全密码：<code className="bg-gray-100 px-1.5 py-0.5 rounded text-red-500 font-mono">aical999</code></p>
+              </section>
+
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">2. 初始配置 (Settings)</h3>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li><strong>Gemini AI 配置</strong>: 必需。输入 Google Gemini API Key (以 AIza 开头)。</li>
+                  <li><strong>Google Drive 集成</strong>: 如需从 Drive 导入或保存，请输入 Client ID 和 Picker API Key。</li>
+                  <li><strong>外观默认值</strong>: 可预设生成卡片的默认大小和标签样式，减少重复调整。</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">3. 导入图片</h3>
+                <p>支持 <strong>本地上传</strong> (拖拽或点击虚线框) 和 <strong>Google Drive 导入</strong> (支持文件夹浏览和多选)。</p>
+              </section>
+
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">4. 批量处理</h3>
+                <p>点击顶部 <strong>Process Batch</strong> 按钮。AI 将自动识别食物、检测已有文字并生成营养数据。非食物图片会被自动过滤。</p>
+              </section>
+
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">5. 编辑与排版</h3>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li><strong>拖拽</strong>: 画布上的标题、卡片、标签均可自由拖拽。</li>
+                  <li><strong>编辑文字</strong>: 双击标签或标题可修改内容。</li>
+                  <li><strong>调整样式</strong>: 右侧控制面板可调整大小。双击标签或在右侧列表可切换标签样式 (Pill/Text/Default)。</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">6. 导出与保存</h3>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li><strong>Save to Drive</strong>: 将当前图片保存回 Google Drive。若开启 "Move original to Trash" 且授权完整，会自动删除原图。</li>
+                  <li><strong>批量保存</strong>: 在左侧列表勾选多张图片，使用队列上方的批量保存功能。</li>
+                </ul>
+              </section>
+              
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">7. TikTok 比例裁剪</h3>
+                <p>在左侧队列上方开启 "Crop to TikTok (9:16)" 开关。开启后，处理图片时会自动将其裁剪为适合 TikTok 的 9:16 竖屏格式。</p>
+              </section>
+
+               <section className="bg-orange-50 p-4 rounded-lg border border-orange-100">
+                <h3 className="text-sm font-bold text-orange-800 mb-2 flex items-center gap-2"><AlertTriangle size={16}/> 常见问题: Drive 权限</h3>
+                <p className="text-sm text-orange-700">若遇到 "Could not delete original file"，请进入设置点击 <span className="font-semibold">Reset Access</span>，并在重新登录时勾选 <span className="font-semibold">所有权限框</span>。</p>
+              </section>
+            </div>
+
+            <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
+                <button onClick={() => setShowHelp(false)} className="bg-gray-100 text-gray-700 px-6 py-2.5 rounded-xl hover:bg-gray-200 transition-colors font-medium">关闭</button>
+            </div>
           </div>
         </div>
       )}
