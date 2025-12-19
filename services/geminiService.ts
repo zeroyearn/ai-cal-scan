@@ -37,6 +37,17 @@ const analysisSchema = {
       },
       required: ["calories", "carbs", "protein", "fat"],
     },
+    rating: {
+      type: Type.OBJECT,
+      description: "Detailed rating analysis for the product.",
+      properties: {
+        score: { type: Type.NUMBER, description: "A score from 0 to 100 based on health/quality." },
+        verdict: { type: Type.STRING, description: "One word verdict: Excellent, Good, Acceptable, Poor, Avoid." },
+        title: { type: Type.STRING, description: "A short title for the nutritional analysis, e.g., 'High Protein Support' or 'High Sugar Warning'." },
+        description: { type: Type.STRING, description: "A 2-3 sentence explanation of the score, mentioning pros and cons." }
+      },
+      required: ["score", "verdict", "title", "description"]
+    }
   },
   required: ["isFood", "hasExistingText", "items", "nutrition", "mealType", "summary"],
 };
@@ -84,19 +95,20 @@ export async function analyzeFoodImage(
           parts: [
             { inlineData: { mimeType: mimeType, data: base64Image } },
             {
-              text: `Analyze this image for a bulk food processing tool.
+              text: `Analyze this image for a food processing tool.
               1. **Verification**: Determine if the *main subject* is real food. If it is a menu, a recipe book, a human face, an empty plate, or just a wrapper, set 'isFood' to false.
               2. **Text Detection**: Check if the image *already* has text overlays, watermarks, subtitles, or nutrition facts added to it. If yes, set 'hasExistingText' to true.
-              3. **Analysis**: Identify specific ingredients. IMPORTANT: If there are multiple identical items (e.g. a pile of potatoes, multiple cookies), only detect ONE representative item (preferably the most central one) to label. Do NOT label every single instance.
-              4. **Health Score**: If it is a clear food item, provide a 'healthScore' (1-10) and a 'healthTag' (short benefit).
-              5. **Nutrition**: Estimate nutrition facts for the visible portion.`,
+              3. **Analysis**: Identify ingredients. Only detect ONE representative item for multiple identical items.
+              4. **Health Score**: Provide a 'healthScore' (1-10) and 'healthTag'.
+              5. **Nutrition**: Estimate nutrition facts.
+              6. **Rating**: Evaluate the product for a consumer report. Give a score (0-100), a short verdict (e.g. Acceptable), a title for the analysis (e.g. 'High Protein'), and a descriptive reasoning paragraph.`,
             },
           ],
         },
         config: {
           responseMimeType: "application/json",
           responseSchema: analysisSchema,
-          systemInstruction: "You are a rigid food analysis AI. You flag images with existing text overlays and reject non-food images. Provide health scores for valid food.",
+          systemInstruction: "You are a rigid food analysis AI. You flag images with existing text overlays and reject non-food images. You provide strict nutritional ratings.",
         },
       });
 

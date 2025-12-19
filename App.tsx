@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop, LayoutTemplate, Plus, Eye, EyeOff, Smartphone, LayoutGrid, Zap, ListOrdered } from 'lucide-react';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop, LayoutTemplate, Plus, Eye, EyeOff, Smartphone, LayoutGrid, Zap, ListOrdered, GraduationCap } from 'lucide-react';
 import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion, FoodAnalysis } from './types';
 import { analyzeFoodImage, generateViralCaption } from './services/geminiService';
 import { resizeImage, getInitialLayout, drawScene, renderFinalImage, generateCollage } from './utils/canvasUtils';
@@ -61,7 +61,7 @@ function App() {
   const [authError, setAuthError] = useState(false);
 
   // --- App Mode ---
-  const [mode, setMode] = useState<'food' | 'viral'>('food');
+  const [mode, setMode] = useState<'food' | 'viral' | 'collage' | 'rating'>('food');
 
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -72,8 +72,10 @@ function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [autoCrop, setAutoCrop] = useState(false);
 
+  // Filter images based on current mode
+  const displayedImages = images.filter(img => img.mode === mode);
+
   // Collage State
-  const [showCollageModal, setShowCollageModal] = useState(false);
   const [collagePreviewUrl, setCollagePreviewUrl] = useState<string | null>(null);
   const [collageConfig, setCollageConfig] = useState({
       width: 2160,
@@ -97,10 +99,14 @@ function App() {
   const [defaultCardPos, setDefaultCardPos] = useState({ x: 5, y: 75 }); 
 
   const [editorContainerRef, setEditorContainerRef] = useState<HTMLDivElement | null>(null);
-  const [dragTarget, setDragTarget] = useState<{ type: 'card' | 'title' | 'label' | 'caption', id?: number | string } | null>(null);
+  const [dragTarget, setDragTarget] = useState<{ type: 'card' | 'title' | 'label' | 'caption' | 'score' | 'verdict' | 'branding', id?: number | string } | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number, y: number } | null>(null);
   const [originalImageMeta, setOriginalImageMeta] = useState<{w: number, h: number} | null>(null);
   const [containerWidth, setContainerWidth] = useState<number>(1000);
+
+  // Derived State for currently selected image
+  const validSelectedImage = images.find(img => img.id === selectedImageId);
+  const selectedImage = validSelectedImage;
 
   // Canvas & Interaction
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -200,8 +206,36 @@ function App() {
     defaultCardPos
   ]);
 
+  // Redraw Main Canvas when selection or layout changes
   useEffect(() => {
-    if (!showCollageModal || batchSelection.size !== 4) return;
+      const canvas = canvasRef.current;
+      if (!canvas || !validSelectedImage || !validSelectedImage.layout || !validSelectedImage.analysis) return;
+
+      const img = new Image();
+      img.src = validSelectedImage.previewUrl;
+      img.onload = () => {
+          setOriginalImageMeta({ w: img.width, h: img.height });
+          
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = 'high';
+              const regions = drawScene(ctx, img, validSelectedImage.analysis!, validSelectedImage.layout!);
+              setHitRegions(regions);
+          }
+      };
+  }, [validSelectedImage, mode]);
+
+  // TRIGGER COLLAGE GENERATION
+  useEffect(() => {
+    if (mode !== 'collage' || batchSelection.size !== 4) {
+        if(mode === 'collage' && batchSelection.size !== 4) {
+            setCollagePreviewUrl(null); // Clear preview if selection invalid
+        }
+        return;
+    }
     
     const run = async () => {
         setIsGeneratingCollage(true);
@@ -221,10 +255,216 @@ function App() {
         }
     };
     
-    const timeout = setTimeout(run, 500); 
+    const timeout = setTimeout(run, 500); // Debounce
     return () => clearTimeout(timeout);
 
-  }, [showCollageModal, collageConfig, batchSelection, images]);
+  }, [collageConfig, batchSelection, images, mode]);
+
+  // --- Handlers ---
+  
+  const toggleSelectAll = () => {
+      if (batchSelection.size === displayedImages.length && displayedImages.length > 0) {
+          setBatchSelection(new Set());
+      } else {
+          setBatchSelection(new Set(displayedImages.map(img => img.id)));
+      }
+  };
+
+  const toggleSelection = (id: string) => {
+      setBatchSelection(prev => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+      });
+  };
+
+  const removeImage = (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      setImages(prev => prev.filter(img => img.id !== id));
+      if (selectedImageId === id) setSelectedImageId(null);
+      setBatchSelection(prev => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+      });
+  };
+
+  const handleStepChange = (e: React.ChangeEvent<HTMLSelectElement>, id: string) => {
+      const step = parseInt(e.target.value);
+      setImages(prev => prev.map(img => img.id === id ? { ...img, viralStep: step } : img));
+  };
+
+  const handleDragStart = (e: React.MouseEvent, type: 'card' | 'title' | 'label' | 'caption' | 'score' | 'verdict' | 'branding', id?: number | string) => {
+      e.stopPropagation();
+      if (!validSelectedImage || !validSelectedImage.layout) return;
+      setDragTarget({ type, id });
+      setDragOffset({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+      if (!dragTarget || !dragOffset || !validSelectedImage || !originalImageMeta) return;
+
+      const deltaX = e.clientX - dragOffset.x;
+      const deltaY = e.clientY - dragOffset.y;
+
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      
+      const scaleX = 1 / rect.width;
+      const scaleY = 1 / rect.height;
+      
+      const dx = deltaX * scaleX;
+      const dy = deltaY * scaleY;
+
+      setImages(prev => prev.map(img => {
+          if (img.id !== validSelectedImage.id || !img.layout) return img;
+          const newLayout = { ...img.layout };
+          
+          if (dragTarget.type === 'card') {
+              newLayout.card = { ...newLayout.card, x: newLayout.card.x + dx, y: newLayout.card.y + dy };
+          } else if (dragTarget.type === 'title') {
+              newLayout.mealType = { ...newLayout.mealType, x: newLayout.mealType.x + dx, y: newLayout.mealType.y + dy };
+          } else if (dragTarget.type === 'caption' && newLayout.caption) {
+              newLayout.caption = { ...newLayout.caption, x: newLayout.caption.x + dx, y: newLayout.caption.y + dy };
+          } else if (dragTarget.type === 'score' && newLayout.score) {
+              newLayout.score = { ...newLayout.score, x: newLayout.score.x + dx, y: newLayout.score.y + dy };
+          } else if (dragTarget.type === 'verdict' && newLayout.verdict) {
+              newLayout.verdict = { ...newLayout.verdict, x: newLayout.verdict.x + dx, y: newLayout.verdict.y + dy };
+          } else if (dragTarget.type === 'branding' && newLayout.branding) {
+              newLayout.branding = { ...newLayout.branding, x: newLayout.branding.x + dx, y: newLayout.branding.y + dy };
+          } else if (dragTarget.type === 'label' && typeof dragTarget.id === 'number') {
+              newLayout.labels = newLayout.labels.map(l => l.id === dragTarget.id ? { ...l, x: l.x + dx, y: l.y + dy } : l);
+          }
+          return { ...img, layout: newLayout };
+      }));
+      
+      setDragOffset({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleTextEdit = (type: 'title' | 'label' | 'caption', id?: number | string) => {
+      if (!validSelectedImage || !validSelectedImage.layout) return;
+      let current = "";
+      if (type === 'title') current = validSelectedImage.layout.mealType.text || "";
+      else if (type === 'caption') current = validSelectedImage.layout.caption?.text || "";
+      else if (type === 'label') {
+          const l = validSelectedImage.layout.labels.find(x => x.id === id);
+          if (l) current = l.text || "";
+      }
+      
+      const newVal = prompt("Edit text:", current);
+      if (newVal === null) return;
+      
+      setImages(prev => prev.map(img => {
+          if (img.id !== validSelectedImage.id || !img.layout) return img;
+          const newLayout = { ...img.layout };
+          if (type === 'title') newLayout.mealType.text = newVal;
+          else if (type === 'caption' && newLayout.caption) newLayout.caption.text = newVal;
+          else if (type === 'label') newLayout.labels = newLayout.labels.map(l => l.id === id ? { ...l, text: newVal } : l);
+          return { ...img, layout: newLayout };
+      }));
+  };
+
+  const handleStyleCycle = (id: number) => {
+      setImages(prev => prev.map(img => {
+          if (img.id !== validSelectedImage?.id || !img.layout) return img;
+          const styles: LabelStyle[] = ['default', 'pill', 'text'];
+          const newLayout = { ...img.layout };
+          newLayout.labels = newLayout.labels.map(l => {
+              if (l.id === id) {
+                  const idx = styles.indexOf(l.style);
+                  return { ...l, style: styles[(idx + 1) % styles.length] };
+              }
+              return l;
+          });
+          return { ...img, layout: newLayout };
+      }));
+  };
+
+  const handleDeleteLabel = (id: number) => {
+      if(!confirm("Remove this label?")) return;
+      setImages(prev => prev.map(img => {
+          if (img.id !== validSelectedImage?.id || !img.layout) return img;
+          const newLayout = { ...img.layout };
+          newLayout.labels = newLayout.labels.filter(l => l.id !== id);
+          return { ...img, layout: newLayout };
+      }));
+  };
+
+  const handleSaveCurrentAsDefault = () => {
+      if (!validSelectedImage?.layout) return;
+      const l = validSelectedImage.layout;
+      
+      const newTitlePos = { x: Math.round(l.mealType.x * 100), y: Math.round(l.mealType.y * 100) };
+      const newCardPos = { x: Math.round(l.card.x * 100), y: Math.round(l.card.y * 100) };
+      
+      setDefaultTitlePos(newTitlePos);
+      setDefaultCardPos(newCardPos);
+      setDefaultTitleScale(l.mealType.scale);
+      setDefaultCardScale(l.card.scale);
+      if(l.labels[0]) {
+          setDefaultLabelScale(l.labels[0].scale);
+          setDefaultLabelStyle(l.labels[0].style);
+      }
+      
+      localStorage.setItem('aical_default_title_pos', JSON.stringify(newTitlePos));
+      localStorage.setItem('aical_default_card_pos', JSON.stringify(newCardPos));
+      localStorage.setItem('aical_default_title_scale', String(l.mealType.scale));
+      localStorage.setItem('aical_default_card_scale', String(l.card.scale));
+      if(l.labels[0]) {
+          localStorage.setItem('aical_default_label_scale', String(l.labels[0].scale));
+          localStorage.setItem('aical_default_label_style', l.labels[0].style);
+      }
+      alert("Defaults saved!");
+  };
+
+  const handleScaleChange = (target: 'title' | 'card' | 'caption' | 'score' | 'verdict' | 'branding', val: number) => {
+      setImages(prev => prev.map(img => {
+          if (img.id !== validSelectedImage?.id || !img.layout) return img;
+          const newLayout = { ...img.layout };
+          if (target === 'title') newLayout.mealType.scale = val;
+          else if (target === 'card') newLayout.card.scale = val;
+          else if (target === 'caption' && newLayout.caption) newLayout.caption.scale = val;
+          else if (target === 'score' && newLayout.score) newLayout.score.scale = val;
+          else if (target === 'verdict' && newLayout.verdict) newLayout.verdict.scale = val;
+          else if (target === 'branding' && newLayout.branding) newLayout.branding.scale = val;
+          return { ...img, layout: newLayout };
+      }));
+  };
+
+  const handleLabelScaleChange = (id: number, val: number) => {
+      setImages(prev => prev.map(img => {
+          if (img.id !== validSelectedImage?.id || !img.layout) return img;
+          const newLayout = { ...img.layout };
+          newLayout.labels = newLayout.labels.map(l => l.id === id ? { ...l, scale: val } : l);
+          return { ...img, layout: newLayout };
+      }));
+  };
+
+  const handleVisibilityToggle = (target: 'title' | 'card' | 'caption' | 'score' | 'verdict' | 'branding', visible: boolean) => {
+      setImages(prev => prev.map(img => {
+          if (img.id !== validSelectedImage?.id || !img.layout) return img;
+          const newLayout = { ...img.layout };
+          if (target === 'title') newLayout.mealType.visible = visible;
+          else if (target === 'card') newLayout.card.visible = visible;
+          else if (target === 'caption' && newLayout.caption) newLayout.caption.visible = visible;
+          else if (target === 'score' && newLayout.score) newLayout.score.visible = visible;
+          else if (target === 'verdict' && newLayout.verdict) newLayout.verdict.visible = visible;
+          else if (target === 'branding' && newLayout.branding) newLayout.branding.visible = visible;
+          return { ...img, layout: newLayout };
+      }));
+  };
+
+  const handleDownload = async () => {
+      if (!validSelectedImage?.layout || !validSelectedImage.analysis) return;
+      const url = await renderFinalImage(validSelectedImage.previewUrl, validSelectedImage.analysis, validSelectedImage.layout);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `AICAL-${validSelectedImage.file.name.replace(/\.[^/.]+$/, "")}.jpg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+  };
 
 
   const saveSettings = () => {
@@ -358,7 +598,10 @@ function App() {
           if (data.action === google.picker.Action.PICKED) {
             const docs = data.docs;
             const newImages: ProcessedImage[] = [];
-            let currentCount = images.length;
+            // Count existing images in current mode
+            const existingModeCount = images.filter(img => img.mode === mode).length;
+            let currentCount = existingModeCount;
+
             for (const doc of docs) {
                try {
                 const fileId = doc.id;
@@ -376,7 +619,8 @@ function App() {
                   previewUrl: URL.createObjectURL(file),
                   status: 'idle',
                   driveFileId: fileId,
-                  viralStep: (currentCount % 6) + 1 // Auto-assign sequence
+                  viralStep: (currentCount % 6) + 1, // Auto-assign sequence based on mode count
+                  mode: mode // Assign current mode
                 });
                 currentCount++;
                } catch(e) { console.error(e) }
@@ -415,7 +659,7 @@ function App() {
       console.error("Picker creation failed:", e);
       setIsDriveLoading(false);
     }
-  }, [googleApiKey, googleClientId, images.length]);
+  }, [googleApiKey, googleClientId, images, mode]); // Added mode dependency
 
   const createFolderPicker = useCallback((token: string, onFolderSelect: (folderId: string) => void) => {
     const google = (window as any).google;
@@ -605,16 +849,19 @@ function App() {
   };
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    const currentCount = images.length;
+    // Count existing images in current mode
+    const existingModeCount = images.filter(img => img.mode === mode).length;
+    
     const newImages: ProcessedImage[] = acceptedFiles.map((file, i) => ({
       id: Math.random().toString(36).substr(2, 9),
       file,
       previewUrl: URL.createObjectURL(file),
       status: 'idle',
-      viralStep: ((currentCount + i) % 6) + 1 // Cycle 1-6
+      viralStep: ((existingModeCount + i) % 6) + 1, // Cycle 1-6 relative to existing count in mode
+      mode: mode // Assign current mode
     }));
     setImages((prev) => [...prev, ...newImages]);
-  }, [images.length]);
+  }, [images, mode]); // Add dependencies
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept: { 'image/*': [] } });
 
@@ -626,16 +873,22 @@ function App() {
   }, [editorContainerRef]);
 
   const processImages = async () => {
+    if (mode === 'collage') return; // Collage doesn't use standard processing
+    
     setIsProcessing(true);
-    const imagesToProcess = images.filter(img => img.status === 'idle' || img.status === 'error');
+    // Filter to process ONLY images in the current mode
+    const imagesToProcess = images.filter(img => img.mode === mode && (img.status === 'idle' || img.status === 'error'));
     const BATCH_SIZE = 3; 
 
     const processSingleImage = async (imgData: ProcessedImage) => {
         try {
             setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'analyzing' } : p));
             
+            // For Rating Mode, default to 9:16 crop as it looks better for reports
+            const shouldAutoCrop = mode === 'rating' ? true : autoCrop;
+
             // Standard resize logic
-            const { base64: base64Data, mimeType } = await resizeImage(imgData.file, 2560, autoCrop);
+            const { base64: base64Data, mimeType } = await resizeImage(imgData.file, 2560, shouldAutoCrop);
             const correctedPreviewUrl = `data:${mimeType};base64,${base64Data}`;
             
             // Re-load image to get dims
@@ -667,10 +920,11 @@ function App() {
                 if (layout.card) layout.card.visible = false;
                 if (layout.labels) layout.labels = [];
 
-                setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, previewUrl: correctedPreviewUrl, status: 'complete', analysis: dummyAnalysis, layout } : p));
+                setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, previewUrl: correctedPreviewUrl, status: 'complete', analysis: dummyAnalysis, layout: { ...layout, mode: 'viral' } } : p));
             } 
-            // --- FOOD MODE LOGIC ---
+            // --- FOOD & RATING MODE LOGIC ---
             else {
+                // Same analysis for Food and Rating, but Rating mode expects 'rating' fields
                 const analysis = await analyzeFoodImage(base64Data, mimeType, geminiApiKey, geminiApiUrl);
                 if (!analysis.isFood) {
                     setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, status: 'not-food', error: 'Not recognized as food' } : p));
@@ -681,7 +935,10 @@ function App() {
                     defaultLabelStyle, defaultTitleScale, defaultCardScale, defaultLabelScale, defaultTitlePos, defaultCardPos
                 });
                 
-                setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, previewUrl: correctedPreviewUrl, status: 'complete', analysis, layout } : p));
+                // If rating mode, set layout mode to trigger the special renderer
+                const finalLayout = mode === 'rating' ? { ...layout, mode: 'rating' } : { ...layout, mode: 'food' };
+
+                setImages(prev => prev.map(p => p.id === imgData.id ? { ...p, previewUrl: correctedPreviewUrl, status: 'complete', analysis, layout: finalLayout } : p));
             }
 
         } catch (error: any) {
@@ -696,245 +953,10 @@ function App() {
     setIsProcessing(false);
   };
 
-  const toggleSelection = (id: string) => {
-    setBatchSelection(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
-
-  const toggleSelectAll = () => {
-    if (batchSelection.size === images.length && images.length > 0) {
+  const switchMode = (newMode: 'food' | 'viral' | 'collage' | 'rating') => {
+      setMode(newMode);
+      setSelectedImageId(null);
       setBatchSelection(new Set());
-    } else {
-      setBatchSelection(new Set(images.map(img => img.id)));
-    }
-  };
-
-  const removeImage = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setImages(prev => prev.filter(img => img.id !== id));
-    if (selectedImageId === id) setSelectedImageId(null);
-    setBatchSelection(prev => { const next = new Set(prev); next.delete(id); return next; });
-  };
-  
-  const handleStepChange = (e: React.ChangeEvent<HTMLSelectElement>, id: string) => {
-      e.stopPropagation();
-      const step = parseInt(e.target.value);
-      setImages(prev => prev.map(img => img.id === id ? { ...img, viralStep: step } : img));
-  };
-
-  const selectedImage = images.find(img => img.id === selectedImageId);
-  const selectedLayout = selectedImage?.layout;
-  const selectedAnalysis = selectedImage?.analysis;
-  
-  // -- CANVAS RENDERING --
-  useEffect(() => {
-    if (selectedImage?.status === 'complete' && selectedAnalysis && selectedLayout && canvasRef.current) {
-        const img = new Image();
-        img.src = selectedImage.previewUrl;
-        img.onload = () => {
-            const canvas = canvasRef.current;
-            if(!canvas) return;
-            canvas.width = img.width;
-            canvas.height = img.height;
-            setOriginalImageMeta({ w: img.width, h: img.height });
-            
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                const regions = drawScene(ctx, img, selectedAnalysis, selectedLayout);
-                setHitRegions(regions);
-            }
-        };
-    }
-  }, [selectedImage?.previewUrl, selectedLayout, selectedAnalysis, selectedImage?.status]);
-
-
-  const handleDragStart = (e: React.MouseEvent, type: 'card' | 'title' | 'label' | 'caption', id: number | string) => {
-    e.preventDefault(); e.stopPropagation();
-    if (!selectedLayout || !originalImageMeta || !editorContainerRef) return;
-    
-    const rect = (e.target as HTMLElement).getBoundingClientRect();
-    const containerRect = editorContainerRef.getBoundingClientRect();
-    const elLeft = rect.left - containerRect.left;
-    const elTop = rect.top - containerRect.top;
-    const mouseX = e.clientX - containerRect.left;
-    const mouseY = e.clientY - containerRect.top;
-    
-    setDragTarget({ type, id });
-    setDragOffset({ x: mouseX - elLeft, y: mouseY - elTop });
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!dragTarget || !selectedImage || !editorContainerRef || !dragOffset) return;
-    const rect = editorContainerRef.getBoundingClientRect();
-    
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    
-    const newElX = mouseX - dragOffset.x;
-    const newElY = mouseY - dragOffset.y;
-    
-    let xPct = newElX / rect.width;
-    let yPct = newElY / rect.height;
-
-    setImages(prev => prev.map(img => {
-      if (img.id !== selectedImage.id || !img.layout) return img;
-      const newLayout = { ...img.layout };
-      
-      if (dragTarget.type === 'card') {
-          newLayout.card = { ...newLayout.card, x: xPct, y: yPct };
-      }
-      else if (dragTarget.type === 'title') {
-          const region = hitRegions.find(r => r.type === 'title');
-          if (region) {
-              const pctW = region.w / rect.width;
-              newLayout.mealType = { ...newLayout.mealType, x: xPct + pctW/2, y: yPct };
-          }
-      }
-      else if (dragTarget.type === 'caption') {
-          const region = hitRegions.find(r => r.type === 'caption');
-          if (region) {
-              const pctW = region.w / rect.width;
-              // Caption is drawn centered, so x is center
-              if (newLayout.caption) newLayout.caption = { ...newLayout.caption, x: xPct + pctW/2, y: yPct + (region.h / rect.height) };
-          }
-      }
-      else if (dragTarget.type === 'label' && dragTarget.id !== undefined) {
-         const region = hitRegions.find(r => r.id === dragTarget.id);
-         if (region) {
-            const pctW = region.w / rect.width;
-            const pctH = region.h / rect.height;
-            newLayout.labels = newLayout.labels.map(l => l.id === dragTarget.id ? { ...l, x: xPct + pctW/2, y: yPct + pctH/2 } : l);
-         }
-      }
-      return { ...img, layout: newLayout };
-    }));
-  };
-
-  const handleScaleChange = (type: 'card' | 'title' | 'caption', value: number) => {
-    if (!selectedImage?.layout) return;
-    setImages(prev => prev.map(img => {
-      if (img.id !== selectedImage.id || !img.layout) return img;
-      const newLayout = { ...img.layout };
-      if (type === 'card') newLayout.card = { ...newLayout.card, scale: value };
-      else if (type === 'title') newLayout.mealType = { ...newLayout.mealType, scale: value };
-      else if (type === 'caption' && newLayout.caption) newLayout.caption = { ...newLayout.caption, scale: value };
-      return { ...img, layout: newLayout };
-    }));
-  };
-
-  const handleVisibilityToggle = (type: 'card' | 'title' | 'caption', isVisible: boolean) => {
-    if (!selectedImage?.layout) return;
-    setImages(prev => prev.map(img => {
-      if (img.id !== selectedImage.id || !img.layout) return img;
-      const newLayout = { ...img.layout };
-      if (type === 'card') newLayout.card = { ...newLayout.card, visible: isVisible };
-      else if (type === 'title') newLayout.mealType = { ...newLayout.mealType, visible: isVisible };
-      else if (type === 'caption' && newLayout.caption) newLayout.caption = { ...newLayout.caption, visible: isVisible };
-      return { ...img, layout: newLayout };
-    }));
-  };
-  
-  const handleLabelScaleChange = (id: number, value: number) => {
-    if (!selectedImage?.layout) return;
-    setImages(prev => prev.map(img => {
-      if (img.id !== selectedImage.id || !img.layout) return img;
-      const newLayout = { ...img.layout };
-      newLayout.labels = newLayout.labels.map(l => l.id === id ? { ...l, scale: value } : l);
-      return { ...img, layout: newLayout };
-    }));
-  };
-
-  const handleDeleteLabel = (id: number) => {
-    if (!selectedImage?.layout) return;
-    setImages(prev => prev.map(img => {
-      if (img.id !== selectedImage.id || !img.layout) return img;
-      const newLayout = { ...img.layout };
-      newLayout.labels = newLayout.labels.filter(l => l.id !== id);
-      return { ...img, layout: newLayout };
-    }));
-  };
-
-  const handleStyleCycle = (id: number) => {
-    if (!selectedImage?.layout) return;
-    const styles: LabelStyle[] = ['default', 'pill', 'text'];
-    setImages(prev => prev.map(img => {
-      if (img.id !== selectedImage.id || !img.layout) return img;
-      const newLayout = { ...img.layout };
-      newLayout.labels = newLayout.labels.map(l => {
-        if (l.id === id) {
-          const currentIdx = styles.indexOf(l.style);
-          const nextStyle = styles[(currentIdx + 1) % styles.length];
-          return { ...l, style: nextStyle };
-        }
-        return l;
-      });
-      return { ...img, layout: newLayout };
-    }));
-  };
-
-  const handleTextEdit = (type: 'title' | 'label' | 'caption', id?: number | string) => {
-    if (!selectedImage?.layout) return;
-    let currentText = "";
-    if (type === 'title') currentText = selectedImage.layout.mealType.text || "";
-    if (type === 'caption') currentText = selectedImage.layout.caption?.text || "";
-    if (type === 'label' && id !== undefined) { const l = selectedImage.layout.labels.find(l => l.id === id); if (l) currentText = l.text || ""; }
-    const newText = prompt("Edit text:", currentText);
-    if (newText !== null && newText !== currentText) {
-       setImages(prev => prev.map(img => {
-        if (img.id !== selectedImage.id || !img.layout) return img;
-        const newLayout = { ...img.layout };
-        if (type === 'title') newLayout.mealType = { ...newLayout.mealType, text: newText };
-        else if (type === 'caption' && newLayout.caption) newLayout.caption = { ...newLayout.caption, text: newText };
-        else if (type === 'label' && id !== undefined) newLayout.labels = newLayout.labels.map(l => l.id === id ? { ...l, text: newText } : l);
-        return { ...img, layout: newLayout };
-      }));
-    }
-  };
-
-  const handleDownload = async () => {
-    if (!selectedImage || !selectedImage.layout || !selectedImage.analysis) return;
-    const url = await renderFinalImage(selectedImage.previewUrl, selectedImage.analysis, selectedImage.layout);
-    const date = new Date().toISOString().split('T')[0], safeTag = exportTag.trim().replace(/[\/\\:*?"<>|]/g, '') || "Style";
-    const a = document.createElement('a'); a.href = url; a.download = `${date}-${safeTag}.jpg`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  };
-
-  const handleSaveCurrentAsDefault = () => {
-    if (!selectedImage || !selectedImage.layout) return;
-    const l = selectedImage.layout;
-
-    setDefaultTitleScale(l.mealType.scale);
-    setDefaultCardScale(l.card.scale);
-    
-    const newTitlePos = { x: parseFloat((l.mealType.x * 100).toFixed(1)), y: parseFloat((l.mealType.y * 100).toFixed(1)) };
-    const newCardPos = { x: parseFloat((l.card.x * 100).toFixed(1)), y: parseFloat((l.card.y * 100).toFixed(1)) };
-    
-    setDefaultTitlePos(newTitlePos);
-    setDefaultCardPos(newCardPos);
-
-    if (l.labels.length > 0) {
-        setDefaultLabelScale(l.labels[0].scale);
-        setDefaultLabelStyle(l.labels[0].style);
-    }
-
-    localStorage.setItem('aical_default_title_scale', String(l.mealType.scale));
-    localStorage.setItem('aical_default_card_scale', String(l.card.scale));
-    localStorage.setItem('aical_default_title_pos', JSON.stringify(newTitlePos));
-    localStorage.setItem('aical_default_card_pos', JSON.stringify(newCardPos));
-    
-    if (l.labels.length > 0) {
-        localStorage.setItem('aical_default_label_scale', String(l.labels[0].scale));
-        localStorage.setItem('aical_default_label_style', l.labels[0].style);
-    }
-    
-    alert("✅ Defaults Updated!");
   };
 
   if (!isAuthenticated) {
@@ -970,16 +992,22 @@ function App() {
             
             {/* Mode Toggle */}
             <div className="ml-8 flex bg-gray-100 p-1 rounded-lg">
-                <button onClick={() => setMode('food')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${mode === 'food' ? 'bg-white shadow-sm text-black' : 'text-gray-500 hover:text-gray-900'}`}>
+                <button onClick={() => switchMode('food')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${mode === 'food' ? 'bg-white shadow-sm text-black' : 'text-gray-500 hover:text-gray-900'}`}>
                     <Utensils size={14}/> Food Mode
                 </button>
-                <button onClick={() => setMode('viral')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${mode === 'viral' ? 'bg-white shadow-sm text-purple-600' : 'text-gray-500 hover:text-gray-900'}`}>
+                <button onClick={() => switchMode('rating')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${mode === 'rating' ? 'bg-white shadow-sm text-green-600' : 'text-gray-500 hover:text-gray-900'}`}>
+                    <GraduationCap size={14}/> Rating Mode
+                </button>
+                <button onClick={() => switchMode('viral')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${mode === 'viral' ? 'bg-white shadow-sm text-purple-600' : 'text-gray-500 hover:text-gray-900'}`}>
                     <Zap size={14}/> Viral Story Mode
+                </button>
+                 <button onClick={() => switchMode('collage')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${mode === 'collage' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}>
+                    <LayoutGrid size={14}/> Collage Mode
                 </button>
             </div>
         </div>
         <div className="flex items-center gap-4">
-           {images.length > 0 && <button onClick={processImages} disabled={isProcessing || !images.some(i => i.status === 'idle')} className={`flex items-center gap-2 px-5 py-2.5 rounded-full font-medium transition-all ${isProcessing || !images.some(i => i.status === 'idle') ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-black text-white hover:bg-gray-800 shadow-lg hover:shadow-xl'}`}>{isProcessing ? <Loader2 className="animate-spin" size={18} /> : (mode === 'viral' ? <Zap size={18} /> : <Camera size={18} />)}{isProcessing ? 'Processing...' : (mode === 'viral' ? 'Generate Viral Captions' : 'Process Batch')}</button>}
+           {mode !== 'collage' && displayedImages.length > 0 && <button onClick={processImages} disabled={isProcessing || !displayedImages.some(i => i.status === 'idle')} className={`flex items-center gap-2 px-5 py-2.5 rounded-full font-medium transition-all ${isProcessing || !displayedImages.some(i => i.status === 'idle') ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-black text-white hover:bg-gray-800 shadow-lg hover:shadow-xl'}`}>{isProcessing ? <Loader2 className="animate-spin" size={18} /> : (mode === 'viral' ? <Zap size={18} /> : mode === 'rating' ? <GraduationCap size={18} /> : <Camera size={18} />)}{isProcessing ? 'Processing...' : (mode === 'viral' ? 'Generate Viral Captions' : mode === 'rating' ? 'Score & Analyze' : 'Process Batch')}</button>}
         </div>
       </header>
       <main className="flex-1 flex overflow-hidden">
@@ -1010,7 +1038,7 @@ function App() {
             </div>
           </div>
           <div className="flex flex-col px-4 py-3 border-b border-gray-100 bg-gray-50/50 gap-3">
-            <div className="flex justify-between items-center"><span className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Queue ({images.length})</span><button onClick={toggleSelectAll} className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors" disabled={images.length === 0}>{batchSelection.size === images.length && images.length > 0 ? 'Deselect All' : 'Select All'}</button></div>
+            <div className="flex justify-between items-center"><span className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Queue ({displayedImages.length})</span><button onClick={toggleSelectAll} className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors" disabled={displayedImages.length === 0}>{batchSelection.size === displayedImages.length && displayedImages.length > 0 ? 'Deselect All' : 'Select All'}</button></div>
             
              <div className="flex items-center justify-between bg-white border border-gray-200 p-2 rounded-lg cursor-pointer hover:border-gray-300 transition-colors" onClick={() => setAutoCrop(!autoCrop)}>
                 <div className="flex items-center gap-2 text-sm text-gray-700">
@@ -1022,17 +1050,11 @@ function App() {
                 </div>
             </div>
 
-            {batchSelection.size === 4 && (
-                <button onClick={() => setShowCollageModal(true)} className="w-full flex items-center justify-center gap-2 bg-purple-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm animate-in slide-in-from-top-2">
-                    <LayoutGrid size={16} /> Create 2x2 Collage
-                </button>
-            )}
-
             {batchSelection.size > 0 && <div className="flex flex-col gap-2 animate-in slide-in-from-top-2 duration-200"><div className="flex items-center gap-2"><Tag size={14} className="text-gray-400" /><input type="text" value={exportTag} onChange={(e) => setExportTag(e.target.value)} className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:border-black focus:ring-1 focus:ring-black outline-none" placeholder="Style Tag" /></div><button onClick={handleBatchSaveToDrive} disabled={isUploading} className="w-full flex items-center justify-center gap-2 bg-black text-white py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors shadow-sm">{isUploading ? <Loader2 className="animate-spin" size={14}/> : <CloudUpload size={14} />}Save {batchSelection.size} to Drive</button></div>}
           </div>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
-            {images.length === 0 && <div className="h-full flex flex-col items-center justify-center text-gray-400 opacity-50"><ImageIcon size={48} className="mb-4" /><p>No images uploaded yet</p></div>}
-            {images.map((img) => (
+            {displayedImages.length === 0 && <div className="h-full flex flex-col items-center justify-center text-gray-400 opacity-50"><ImageIcon size={48} className="mb-4" /><p>No images in {mode.charAt(0).toUpperCase() + mode.slice(1)} Mode</p></div>}
+            {displayedImages.map((img) => (
               <div key={img.id} onClick={() => setSelectedImageId(img.id)} className={`relative group flex flex-col gap-2 p-3 rounded-xl border transition-all cursor-pointer ${selectedImageId === img.id ? 'border-green-500 bg-green-50/30 ring-1 ring-green-500' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
                 <div className="flex items-center gap-3">
                     <div onClick={(e) => { e.stopPropagation(); toggleSelection(img.id); }} className="cursor-pointer text-gray-300 hover:text-black transition-colors">{batchSelection.has(img.id) ? <CheckSquare size={20} className="text-black" /> : <Square size={20} />}</div>
@@ -1077,13 +1099,72 @@ function App() {
         <div className="flex-1 bg-gray-100 overflow-y-auto p-8 relative custom-scrollbar">
           <div className="absolute inset-0 pattern-grid opacity-[0.03] pointer-events-none fixed"></div>
           <div className="flex flex-col items-center min-h-full justify-center">
-            {selectedImage ? (
+            {/* COLLAGE MODE UI */}
+            {mode === 'collage' ? (
+                <div className="max-w-6xl w-full flex flex-col md:flex-row gap-8 pb-12 h-full">
+                     <div className="flex-1 flex flex-col items-center justify-center min-h-[400px]">
+                         {isGeneratingCollage ? (
+                            <div className="flex flex-col items-center gap-3 bg-white/80 p-6 rounded-xl backdrop-blur-sm shadow-lg">
+                                <Loader2 className="animate-spin text-purple-600" size={32}/>
+                                <span className="font-medium text-gray-600">Generating Preview...</span>
+                            </div>
+                        ) : collagePreviewUrl ? (
+                            <img src={collagePreviewUrl} className="max-w-full max-h-[80vh] shadow-2xl rounded-sm object-contain bg-white" alt="Collage Preview"/>
+                        ) : (
+                            <div className="text-center text-gray-400">
+                                <div className="bg-white p-6 rounded-full inline-block shadow-sm mb-4"><LayoutGrid size={48} className="text-gray-300" /></div>
+                                <h3 className="text-lg font-medium text-gray-600">Select exactly 4 images</h3>
+                                <p className="text-sm text-gray-400 mt-2">Current Selection: {batchSelection.size}/4</p>
+                            </div>
+                        )}
+                     </div>
+
+                     <div className="w-80 bg-white p-6 rounded-xl shadow-sm border border-gray-200 h-fit space-y-6 shrink-0">
+                         <h3 className="font-bold text-gray-900 border-b pb-2 flex items-center gap-2"><Settings size={18} /> Collage Settings</h3>
+                         <div>
+                             <label className="block text-sm font-semibold text-gray-700 mb-2">Output Size</label>
+                             <div className="grid grid-cols-2 gap-2 mb-3">
+                                 <button onClick={() => setCollageConfig({...collageConfig, width: 2160, height: 2160})} className={`text-xs py-2 rounded border ${collageConfig.width === 2160 && collageConfig.height === 2160 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Square (2K)</button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, width: 1080, height: 1920})} className={`text-xs py-2 rounded border ${collageConfig.width === 1080 && collageConfig.height === 1920 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Story (9:16)</button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, width: 1080, height: 1350})} className={`text-xs py-2 rounded border ${collageConfig.width === 1080 && collageConfig.height === 1350 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Portrait (4:5)</button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, width: 3840, height: 2160})} className={`text-xs py-2 rounded border ${collageConfig.width === 3840 && collageConfig.height === 2160 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Landscape (4K)</button>
+                             </div>
+                             <div className="flex gap-2">
+                                 <div><label className="text-xs text-gray-500">Width</label><input type="number" value={collageConfig.width} onChange={(e) => setCollageConfig({...collageConfig, width: parseInt(e.target.value) || 1000})} className="w-full px-3 py-2 border rounded-md text-sm" /></div>
+                                 <div><label className="text-xs text-gray-500">Height</label><input type="number" value={collageConfig.height} onChange={(e) => setCollageConfig({...collageConfig, height: parseInt(e.target.value) || 1000})} className="w-full px-3 py-2 border rounded-md text-sm" /></div>
+                             </div>
+                        </div>
+                        <div>
+                             <div className="flex justify-between mb-1"><label className="text-sm font-semibold text-gray-700">Padding</label><span className="text-xs text-gray-500">{collageConfig.padding}px</span></div>
+                             <input type="range" min="0" max="200" value={collageConfig.padding} onChange={(e) => setCollageConfig({...collageConfig, padding: parseInt(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"/>
+                        </div>
+                         <div>
+                             <label className="text-sm font-semibold text-gray-700 mb-2 block">Background Color</label>
+                             <div className="flex gap-2">
+                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#ffffff'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#ffffff' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#fff'}}></button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#000000'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#000000' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#000'}}></button>
+                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#f3f4f6'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#f3f4f6' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#f3f4f6'}}></button>
+                                 <input type="color" value={collageConfig.color} onChange={(e) => setCollageConfig({...collageConfig, color: e.target.value})} className="w-8 h-8 p-0 border-0 rounded-full overflow-hidden cursor-pointer" />
+                             </div>
+                        </div>
+                        <div className="pt-4 space-y-3">
+                            <button onClick={handleDownloadCollage} disabled={!collagePreviewUrl} className="w-full flex items-center justify-center gap-2 bg-black text-white py-2.5 rounded-lg font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                                <Download size={18}/> Download
+                            </button>
+                            <button onClick={handleSaveCollageToDrive} disabled={!collagePreviewUrl || isUploading} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 text-gray-700 py-2.5 rounded-lg font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                                {isUploading ? <Loader2 className="animate-spin" size={18}/> : <CloudUpload size={18}/>} Save to Drive
+                            </button>
+                        </div>
+                     </div>
+                </div>
+            ) : validSelectedImage ? (
+                // EXISTING SINGLE IMAGE EDITOR (Food/Viral)
               <div className="max-w-4xl w-full flex flex-col gap-6 pb-12">
                 <div className="flex justify-center relative">
                   {/* MAIN CANVAS PREVIEW CONTAINER */}
                   <div className="relative shadow-2xl rounded-lg overflow-hidden bg-white select-none inline-flex" style={{ maxWidth: '100%' }} ref={setEditorContainerRef} >
                      <canvas ref={canvasRef} className="block w-full h-auto pointer-events-none" style={{maxHeight: '60vh'}} />
-                     {selectedImage.status === 'complete' && originalImageMeta && (
+                     {validSelectedImage.status === 'complete' && originalImageMeta && (
                          <div className="absolute inset-0 z-10 w-full h-full">
                              {hitRegions.map(region => (
                                  <div
@@ -1115,11 +1196,11 @@ function App() {
                              ))}
                          </div>
                      )}
-                    {selectedImage.status === 'analyzing' && <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 backdrop-blur-sm z-50"><Loader2 className="animate-spin text-white mb-2" size={48} /><p className="text-white font-medium">Analysing content...</p></div>}
+                    {validSelectedImage.status === 'analyzing' && <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 backdrop-blur-sm z-50"><Loader2 className="animate-spin text-white mb-2" size={48} /><p className="text-white font-medium">Analysing content...</p></div>}
                   </div>
                 </div>
 
-                {selectedImage.status === 'complete' && selectedImage.layout && (
+                {validSelectedImage.status === 'complete' && validSelectedImage.layout && (
                   <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
                     <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2 text-gray-500"><SlidersHorizontal size={16} /><h4 className="text-xs font-semibold uppercase tracking-wider">Editor Controls</h4></div>
@@ -1130,16 +1211,16 @@ function App() {
                     {mode === 'viral' ? (
                          <div className="space-y-4">
                               <h5 className="font-medium text-sm text-gray-900 border-b pb-2">Viral Caption</h5>
-                              {selectedImage.layout.caption?.visible ? (
+                              {validSelectedImage.layout.caption?.visible ? (
                                 <div className="flex items-center gap-4">
                                      <div className="flex-1 space-y-2">
                                          <label className="text-xs font-medium text-gray-600">Caption Text (Double click preview to edit)</label>
                                          <textarea 
-                                            value={selectedImage.layout.caption?.text || ''} 
+                                            value={validSelectedImage.layout.caption?.text || ''} 
                                             onChange={(e) => {
                                                 const val = e.target.value;
                                                 setImages(prev => prev.map(img => {
-                                                    if(img.id !== selectedImage.id || !img.layout) return img;
+                                                    if(img.id !== validSelectedImage.id || !img.layout) return img;
                                                     const newLayout = {...img.layout};
                                                     if(newLayout.caption) newLayout.caption.text = val;
                                                     return {...img, layout: newLayout};
@@ -1150,8 +1231,8 @@ function App() {
                                      </div>
                                      <div className="w-48 space-y-4">
                                         <div className="flex flex-col gap-1">
-                                            <div className="flex justify-between text-xs font-medium text-gray-600"><span>Size</span><span>{Math.round(selectedImage.layout.caption.scale * 100)}%</span></div>
-                                            <input type="range" min="0" max="5" step="0.1" value={selectedImage.layout.caption.scale} onChange={(e) => handleScaleChange('caption', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600" />
+                                            <div className="flex justify-between text-xs font-medium text-gray-600"><span>Size</span><span>{Math.round(validSelectedImage.layout.caption.scale * 100)}%</span></div>
+                                            <input type="range" min="0" max="5" step="0.1" value={validSelectedImage.layout.caption.scale} onChange={(e) => handleScaleChange('caption', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600" />
                                         </div>
                                      </div>
                                 </div>
@@ -1159,16 +1240,90 @@ function App() {
                                   <button onClick={() => handleVisibilityToggle('caption', true)} className="text-blue-600 text-sm">Show Caption</button>
                               )}
                          </div>
+                    ) : mode === 'rating' ? (
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                           <div className="space-y-6">
+                               <h5 className="font-medium text-sm text-gray-900 border-b pb-2">Rating Elements</h5>
+                               <div className="flex items-center gap-2">
+                                  {validSelectedImage.layout.score?.visible ? (
+                                     <>
+                                       <div className="flex-1 flex flex-col gap-1">
+                                           <div className="flex justify-between text-xs font-medium text-gray-600"><span>Score Size</span><span>{Math.round((validSelectedImage.layout.score.scale || 1) * 100)}%</span></div>
+                                           <input type="range" min="0.5" max="3" step="0.1" value={validSelectedImage.layout.score.scale} onChange={(e) => handleScaleChange('score', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-green-600" />
+                                       </div>
+                                       <button onClick={() => handleVisibilityToggle('score', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Score"><Trash2 size={16}/></button>
+                                     </>
+                                  ) : (
+                                     <button onClick={() => handleVisibilityToggle('score', true)} className="text-xs font-medium text-blue-600 flex items-center gap-1"><Plus size={14}/> Show Score</button>
+                                  )}
+                               </div>
+                               <div className="flex items-center gap-2">
+                                  {validSelectedImage.layout.verdict?.visible ? (
+                                     <>
+                                       <div className="flex-1 flex flex-col gap-1">
+                                           <div className="flex justify-between text-xs font-medium text-gray-600"><span>Verdict Size</span><span>{Math.round((validSelectedImage.layout.verdict.scale || 1) * 100)}%</span></div>
+                                           <input type="range" min="0.5" max="3" step="0.1" value={validSelectedImage.layout.verdict.scale} onChange={(e) => handleScaleChange('verdict', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-green-600" />
+                                       </div>
+                                       <button onClick={() => handleVisibilityToggle('verdict', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Verdict"><Trash2 size={16}/></button>
+                                     </>
+                                  ) : (
+                                     <button onClick={() => handleVisibilityToggle('verdict', true)} className="text-xs font-medium text-blue-600 flex items-center gap-1"><Plus size={14}/> Show Verdict</button>
+                                  )}
+                               </div>
+                               <div className="flex items-center gap-2">
+                                  {validSelectedImage.layout.branding?.visible ? (
+                                     <>
+                                       <div className="flex-1 flex flex-col gap-1">
+                                           <div className="flex justify-between text-xs font-medium text-gray-600"><span>Branding Size</span><span>{Math.round((validSelectedImage.layout.branding.scale || 1) * 100)}%</span></div>
+                                           <input type="range" min="0.5" max="2" step="0.1" value={validSelectedImage.layout.branding.scale} onChange={(e) => handleScaleChange('branding', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-gray-600" />
+                                       </div>
+                                       <button onClick={() => handleVisibilityToggle('branding', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Branding"><Trash2 size={16}/></button>
+                                     </>
+                                  ) : (
+                                     <button onClick={() => handleVisibilityToggle('branding', true)} className="text-xs font-medium text-blue-600 flex items-center gap-1"><Plus size={14}/> Show Branding</button>
+                                  )}
+                               </div>
+                           </div>
+                           <div className="space-y-6">
+                               <h5 className="font-medium text-sm text-gray-900 border-b pb-2">Content Elements</h5>
+                               <div className="flex items-center gap-2">
+                                  {validSelectedImage.layout.mealType.visible ? (
+                                     <>
+                                       <div className="flex-1 flex flex-col gap-1">
+                                           <div className="flex justify-between text-xs font-medium text-gray-600"><span>Product Name Size</span><span>{Math.round(validSelectedImage.layout.mealType.scale * 100)}%</span></div>
+                                           <input type="range" min="0.5" max="3" step="0.1" value={validSelectedImage.layout.mealType.scale} onChange={(e) => handleScaleChange('title', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+                                       </div>
+                                       <button onClick={() => handleVisibilityToggle('title', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Name"><Trash2 size={16}/></button>
+                                     </>
+                                  ) : (
+                                     <button onClick={() => handleVisibilityToggle('title', true)} className="text-xs font-medium text-blue-600 flex items-center gap-1"><Plus size={14}/> Show Product Name</button>
+                                  )}
+                               </div>
+                               <div className="flex items-center gap-2">
+                                  {validSelectedImage.layout.card.visible ? (
+                                     <>
+                                       <div className="flex-1 flex flex-col gap-1">
+                                           <div className="flex justify-between text-xs font-medium text-gray-600"><span>Analysis Card Size</span><span>{Math.round(validSelectedImage.layout.card.scale * 100)}%</span></div>
+                                           <input type="range" min="0.5" max="3" step="0.1" value={validSelectedImage.layout.card.scale} onChange={(e) => handleScaleChange('card', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+                                       </div>
+                                       <button onClick={() => handleVisibilityToggle('card', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Card"><Trash2 size={16}/></button>
+                                     </>
+                                  ) : (
+                                     <button onClick={() => handleVisibilityToggle('card', true)} className="text-xs font-medium text-blue-600 flex items-center gap-1"><Plus size={14}/> Show Analysis Card</button>
+                                  )}
+                               </div>
+                           </div>
+                        </div>
                     ) : (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                           <div className="space-y-6">
                               <h5 className="font-medium text-sm text-gray-900 border-b pb-2">Main Elements</h5>
                               <div className="flex items-center gap-2">
-                                 {selectedImage.layout.mealType.visible ? (
+                                 {validSelectedImage.layout.mealType.visible ? (
                                     <>
                                       <div className="flex-1 flex flex-col gap-1">
-                                          <div className="flex justify-between text-xs font-medium text-gray-600"><span>Meal Title Size</span><span>{Math.round(selectedImage.layout.mealType.scale * 100)}%</span></div>
-                                          <input type="range" min="0" max="20" step="0.1" value={selectedImage.layout.mealType.scale} onChange={(e) => handleScaleChange('title', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+                                          <div className="flex justify-between text-xs font-medium text-gray-600"><span>Meal Title Size</span><span>{Math.round(validSelectedImage.layout.mealType.scale * 100)}%</span></div>
+                                          <input type="range" min="0" max="20" step="0.1" value={validSelectedImage.layout.mealType.scale} onChange={(e) => handleScaleChange('title', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
                                       </div>
                                       <button onClick={() => handleVisibilityToggle('title', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Title"><Trash2 size={16}/></button>
                                     </>
@@ -1180,11 +1335,11 @@ function App() {
                                  )}
                               </div>
                               <div className="flex items-center gap-2">
-                                  {selectedImage.layout.card.visible ? (
+                                  {validSelectedImage.layout.card.visible ? (
                                     <>
                                       <div className="flex-1 flex flex-col gap-1">
-                                          <div className="flex justify-between text-xs font-medium text-gray-600"><span>Nutrition Card Size</span><span>{Math.round(selectedImage.layout.card.scale * 100)}%</span></div>
-                                          <input type="range" min="0" max="20" step="0.1" value={selectedImage.layout.card.scale} onChange={(e) => handleScaleChange('card', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+                                          <div className="flex justify-between text-xs font-medium text-gray-600"><span>Nutrition Card Size</span><span>{Math.round(validSelectedImage.layout.card.scale * 100)}%</span></div>
+                                          <input type="range" min="0" max="20" step="0.1" value={validSelectedImage.layout.card.scale} onChange={(e) => handleScaleChange('card', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
                                       </div>
                                       <button onClick={() => handleVisibilityToggle('card', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Card"><Trash2 size={16}/></button>
                                     </>
@@ -1199,7 +1354,7 @@ function App() {
                           <div>
                               <h5 className="font-medium text-sm text-gray-900 border-b pb-2 mb-4">Detected Food Labels</h5>
                               <div className="space-y-3 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                                  {selectedImage.layout.labels.map(label => (
+                                  {validSelectedImage.layout.labels.map(label => (
                                       <div key={label.id} className="flex items-center gap-3 bg-gray-50 p-2 rounded-lg border border-gray-100 hover:border-gray-300 transition-colors">
                                           <span className="text-sm font-medium w-32 truncate text-gray-700 cursor-help" title={label.text}>{label.text}</span>
                                           <div className="flex-1 flex flex-col justify-center"><input type="range" min="0" max="20" step="0.1" value={label.scale} onChange={(e) => handleLabelScaleChange(label.id, parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600" /></div>
@@ -1222,11 +1377,12 @@ function App() {
 
                 <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200">
                   <div>
-                    <h3 className="font-semibold text-gray-900">{selectedImage.analysis?.summary || selectedImage.file.name}</h3>
-                    {selectedImage.analysis && mode === 'food' && <p className="text-sm text-gray-500">{selectedImage.analysis.items.length} items detected • {selectedImage.analysis.nutrition.calories} kcal</p>}
-                    {mode === 'viral' && <p className="text-sm text-gray-500 text-purple-600 font-medium">Step {selectedImage.viralStep}: {VIRAL_FORMULAS.find(f=>f.step === selectedImage.viralStep)?.title}</p>}
+                    <h3 className="font-semibold text-gray-900">{validSelectedImage.analysis?.summary || validSelectedImage.file.name}</h3>
+                    {validSelectedImage.analysis && mode === 'food' && <p className="text-sm text-gray-500">{validSelectedImage.analysis.items.length} items detected • {validSelectedImage.analysis.nutrition.calories} kcal</p>}
+                    {mode === 'viral' && <p className="text-sm text-gray-500 text-purple-600 font-medium">Step {validSelectedImage.viralStep}: {VIRAL_FORMULAS.find(f=>f.step === validSelectedImage.viralStep)?.title}</p>}
+                    {mode === 'rating' && validSelectedImage.analysis?.rating && <p className="text-sm font-medium text-green-600">Score: {validSelectedImage.analysis.rating.score}/100 • {validSelectedImage.analysis.rating.verdict}</p>}
                   </div>
-                  {selectedImage.status === 'complete' && (
+                  {validSelectedImage.status === 'complete' && (
                     <div className="flex items-end gap-3">
                         <div className="flex flex-col items-end">
                              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1"><Tag size={10} /> Filename Tag</label>
@@ -1245,70 +1401,6 @@ function App() {
         </div>
       </main>
       
-      {/* Collage Modal (Same as existing) */}
-      {showCollageModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl shadow-xl max-w-5xl w-full p-0 overflow-hidden flex flex-col md:flex-row max-h-[90vh]">
-                <div className="w-full md:w-1/3 p-6 border-r border-gray-100 bg-gray-50 overflow-y-auto">
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-xl font-bold flex items-center gap-2"><LayoutGrid className="text-purple-600"/> Collage</h2>
-                        <button onClick={() => setShowCollageModal(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-200"><X size={20}/></button>
-                    </div>
-                    <div className="space-y-6">
-                        <div>
-                             <label className="block text-sm font-semibold text-gray-700 mb-2">Output Size</label>
-                             <div className="grid grid-cols-2 gap-2 mb-3">
-                                 <button onClick={() => setCollageConfig({...collageConfig, width: 2160, height: 2160})} className={`text-xs py-2 rounded border ${collageConfig.width === 2160 && collageConfig.height === 2160 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Square (2K)</button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, width: 1080, height: 1920})} className={`text-xs py-2 rounded border ${collageConfig.width === 1080 && collageConfig.height === 1920 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Story (9:16)</button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, width: 1080, height: 1350})} className={`text-xs py-2 rounded border ${collageConfig.width === 1080 && collageConfig.height === 1350 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Portrait (4:5)</button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, width: 3840, height: 2160})} className={`text-xs py-2 rounded border ${collageConfig.width === 3840 && collageConfig.height === 2160 ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600'}`}>Landscape (4K)</button>
-                             </div>
-                             <div className="flex gap-2">
-                                 <div><label className="text-xs text-gray-500">Width</label><input type="number" value={collageConfig.width} onChange={(e) => setCollageConfig({...collageConfig, width: parseInt(e.target.value) || 1000})} className="w-full px-3 py-2 border rounded-md text-sm" /></div>
-                                 <div><label className="text-xs text-gray-500">Height</label><input type="number" value={collageConfig.height} onChange={(e) => setCollageConfig({...collageConfig, height: parseInt(e.target.value) || 1000})} className="w-full px-3 py-2 border rounded-md text-sm" /></div>
-                             </div>
-                        </div>
-                        <div>
-                             <div className="flex justify-between mb-1"><label className="text-sm font-semibold text-gray-700">Padding</label><span className="text-xs text-gray-500">{collageConfig.padding}px</span></div>
-                             <input type="range" min="0" max="200" value={collageConfig.padding} onChange={(e) => setCollageConfig({...collageConfig, padding: parseInt(e.target.value)})} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"/>
-                        </div>
-                         <div>
-                             <label className="text-sm font-semibold text-gray-700 mb-2 block">Background Color</label>
-                             <div className="flex gap-2">
-                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#ffffff'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#ffffff' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#fff'}}></button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#000000'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#000000' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#000'}}></button>
-                                 <button onClick={() => setCollageConfig({...collageConfig, color: '#f3f4f6'})} className={`w-8 h-8 rounded-full border shadow-sm ${collageConfig.color === '#f3f4f6' ? 'ring-2 ring-purple-500' : ''}`} style={{background: '#f3f4f6'}}></button>
-                                 <input type="color" value={collageConfig.color} onChange={(e) => setCollageConfig({...collageConfig, color: e.target.value})} className="w-8 h-8 p-0 border-0 rounded-full overflow-hidden cursor-pointer" />
-                             </div>
-                        </div>
-                    </div>
-
-                    <div className="mt-8 space-y-3">
-                        <button onClick={handleDownloadCollage} disabled={!collagePreviewUrl} className="w-full flex items-center justify-center gap-2 bg-black text-white py-3 rounded-xl font-medium hover:bg-gray-800 transition-colors">
-                            <Download size={18}/> Download Image
-                        </button>
-                        <button onClick={handleSaveCollageToDrive} disabled={!collagePreviewUrl || isUploading} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 text-gray-700 py-3 rounded-xl font-medium hover:bg-gray-50 transition-colors">
-                            {isUploading ? <Loader2 className="animate-spin" size={18}/> : <CloudUpload size={18}/>} Save to Drive
-                        </button>
-                    </div>
-                </div>
-                <div className="w-full md:w-2/3 bg-gray-200 flex items-center justify-center p-8 relative">
-                    <div className="absolute inset-0 pattern-grid opacity-10 pointer-events-none"></div>
-                    {isGeneratingCollage ? (
-                        <div className="flex flex-col items-center gap-3 bg-white/80 p-6 rounded-xl backdrop-blur-sm shadow-lg">
-                            <Loader2 className="animate-spin text-purple-600" size={32}/>
-                            <span className="font-medium text-gray-600">Generating Preview...</span>
-                        </div>
-                    ) : collagePreviewUrl ? (
-                        <img src={collagePreviewUrl} className="max-w-full max-h-[70vh] shadow-2xl rounded-sm object-contain bg-white" alt="Collage Preview"/>
-                    ) : (
-                        <span className="text-gray-400">Preview not available</span>
-                    )}
-                </div>
-            </div>
-        </div>
-      )}
-
       {showDriveSettings && (
         // ... (Settings Modal - Keeping existing settings logic)
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -1412,7 +1504,9 @@ function App() {
             <div className="prose prose-sm prose-gray max-w-none space-y-6 text-gray-600">
                 <p>Welcome to AI Cal. Switch between modes in the header.</p>
                 <p><strong>Food Mode:</strong> Analyzes nutrition and creates calorie cards.</p>
+                <p><strong>Rating Mode:</strong> Analyzes the product quality, assigns a 0-100 score, and generates a detailed report card image.</p>
                 <p><strong>Viral Story Mode:</strong> Upload 6 images. Assign them Step 1-6 using the dropdowns in the sidebar. Click "Generate Viral Captions" to automatically create story-based content using the 6-part viral formula.</p>
+                <p><strong>Collage Mode:</strong> Upload 4 images. Select exactly 4 from the queue to instantly generate a 2x2 grid collage.</p>
             </div>
             <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
                 <button onClick={() => setShowHelp(false)} className="bg-gray-100 text-gray-700 px-6 py-2.5 rounded-xl hover:bg-gray-200 transition-colors font-medium">Close</button>

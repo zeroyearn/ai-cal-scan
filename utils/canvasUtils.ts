@@ -9,6 +9,12 @@ export function drawScene(
   analysis: FoodAnalysis,
   layout: ImageLayout
 ): HitRegion[] {
+  // RATING MODE: Completely different rendering pipeline
+  if (layout.mode === 'rating') {
+      return drawRatingComposite(ctx, img, analysis, layout);
+  }
+
+  // STANDARD MODES (Food & Viral)
   const regions: HitRegion[] = [];
 
   // Clear and draw background only if image is provided
@@ -94,524 +100,430 @@ export function drawScene(
 }
 
 /**
- * Generates the final high-res image for export.
- * Uses the exact same drawScene logic as the preview.
+ * Renders a "Report Card" style composition for Rating Mode with interactive elements.
+ * Optimized to match reference: Side-by-side header, List body.
  */
-export const renderFinalImage = async (
-  base64Image: string,
-  analysis: FoodAnalysis,
-  layout: ImageLayout
-): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.src = base64Image;
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) { reject("No Context"); return; }
-
-      // Enable high-quality smoothing for the final render
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-
-      // Use the unified drawing function
-      drawScene(ctx, img, analysis, layout);
-
-      // CHANGE: Increased quality to 1.0 (Max)
-      resolve(canvas.toDataURL("image/jpeg", 1.0));
-    };
-    img.onerror = reject;
-  });
-};
-
-/**
- * Generates a 2x2 Collage from 4 images
- */
-export const generateCollage = async (
-  imageUrls: string[],
-  config: { width: number; height: number; padding: number; color: string }
-): Promise<string> => {
-    if (imageUrls.length !== 4) throw new Error("Collage requires exactly 4 images");
-
-    // Load all images
-    const images = await Promise.all(imageUrls.map(url => new Promise<HTMLImageElement>((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        img.onload = () => resolve(img);
-        img.onerror = reject;
-        img.src = url;
-    })));
-
-    const canvas = document.createElement("canvas");
-    canvas.width = config.width;
-    canvas.height = config.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Could not get canvas context");
-
-    // Background
-    ctx.fillStyle = config.color;
-    ctx.fillRect(0, 0, config.width, config.height);
-
-    // Calculate Grid
-    const p = config.padding;
-    const cellW = (config.width - (3 * p)) / 2;
-    const cellH = (config.height - (3 * p)) / 2;
+function drawRatingComposite(
+    ctx: CanvasRenderingContext2D,
+    img: HTMLImageElement | null,
+    analysis: FoodAnalysis,
+    layout: ImageLayout
+): HitRegion[] {
+    const w = ctx.canvas.width;
+    const h = ctx.canvas.height;
+    const regions: HitRegion[] = [];
+    const rating = analysis.rating || { score: 0, verdict: "Unknown", title: "Analysis", description: "No data." };
     
-    const positions = [
-        { x: p, y: p },
-        { x: p * 2 + cellW, y: p },
-        { x: p, y: p * 2 + cellH },
-        { x: p * 2 + cellW, y: p * 2 + cellH }
-    ];
+    // Score Color Logic
+    let scoreColor = "#65a30d"; // Green (Lime-600)
+    let scoreRingColor = "#bef264"; // Lime-300
+    if (rating.score < 70) { scoreColor = "#ca8a04"; scoreRingColor = "#fde047"; } // Yellow
+    if (rating.score < 50) { scoreColor = "#dc2626"; scoreRingColor = "#fca5a5"; } // Red
 
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    // 1. Background
+    ctx.fillStyle = "#f3f4f6"; // Light gray bg like reference
+    ctx.fillRect(0, 0, w, h);
 
-    images.forEach((img, i) => {
-        const pos = positions[i];
-        
-        const scale = Math.max(cellW / img.width, cellH / img.height);
-        const renderW = img.width * scale;
-        const renderH = img.height * scale;
-        
-        const offsetX = (cellW - renderW) / 2;
-        const offsetY = (cellH - renderH) / 2;
+    // --- Header Section ---
+    const headerPadding = w * 0.05;
+    const headerH = w * 0.55; // Height of top section
+    
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, w, headerH);
+    
+    // 2. Image (Left Side)
+    // Fixed position relative to top-left, not draggable (background element)
+    const imgSize = w * 0.4;
+    const imgX = headerPadding;
+    const imgY = headerPadding;
+    
+    if (img) {
+        // Crop square center
+        const minDim = Math.min(img.width, img.height);
+        const sx = (img.width - minDim) / 2;
+        const sy = (img.height - minDim) / 2;
         
         ctx.save();
         ctx.beginPath();
-        ctx.rect(pos.x, pos.y, cellW, cellH);
-        ctx.clip(); // Clip to cell box
-        
-        ctx.drawImage(img, pos.x + offsetX, pos.y + offsetY, renderW, renderH);
+        ctx.roundRect(imgX, imgY, imgSize, imgSize, w * 0.04);
+        ctx.clip();
+        ctx.drawImage(img, sx, sy, minDim, minDim, imgX, imgY, imgSize, imgSize);
+        // Inner border
+        ctx.strokeStyle = "rgba(0,0,0,0.05)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
         ctx.restore();
-    });
+    }
 
-    return canvas.toDataURL("image/jpeg", 0.95);
-};
+    // 3. Score (Interactive)
+    if (layout.score && layout.score.visible) {
+        const cx = layout.score.x * w;
+        const cy = layout.score.y * h;
+        const s = layout.score.scale;
+        
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = scoreColor;
+        const fontSize = 80 * s * (w/1000); 
+        ctx.font = `800 ${fontSize}px Inter, sans-serif`;
+        
+        const scoreText = `${rating.score}`;
+        ctx.fillText(scoreText, cx, cy);
+        const scoreMetrics = ctx.measureText(scoreText);
+        
+        // /100 suffix
+        ctx.fillStyle = "#9ca3af";
+        ctx.font = `600 ${fontSize * 0.4}px Inter, sans-serif`;
+        ctx.fillText("/100", cx + scoreMetrics.width + (w*0.01), cy + (fontSize * 0.45));
+        
+        regions.push({
+            id: 'score',
+            type: 'score',
+            x: cx,
+            y: cy,
+            w: scoreMetrics.width * 1.5, 
+            h: fontSize
+        });
+    }
 
+    // 4. Verdict Pill (Interactive)
+    if (layout.verdict && layout.verdict.visible) {
+        const cx = layout.verdict.x * w;
+        const cy = layout.verdict.y * h;
+        const s = layout.verdict.scale;
+        
+        const fontSize = 28 * s * (w/1000);
+        ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+        const vText = rating.verdict;
+        const vMetrics = ctx.measureText(vText);
+        
+        const pillPaddingX = fontSize * 1.2;
+        const pillPaddingY = fontSize * 0.6;
+        const pillW = vMetrics.width + pillPaddingX * 2;
+        const pillH = fontSize + pillPaddingY * 2;
+        
+        // Draw pill
+        ctx.fillStyle = scoreColor;
+        ctx.beginPath();
+        ctx.roundRect(cx, cy, pillW, pillH, pillH/2);
+        ctx.fill();
+        
+        ctx.fillStyle = "#ffffff";
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        ctx.fillText(vText, cx + pillW/2, cy + pillH/2 + (fontSize*0.05));
+        
+        regions.push({
+            id: 'verdict',
+            type: 'verdict',
+            x: cx,
+            y: cy,
+            w: pillW,
+            h: pillH
+        });
+    }
 
-// --- Internal Drawing Functions ---
-
-function drawCaptionInternal(ctx: CanvasRenderingContext2D, text: string, centerX: number, bottomY: number, scale: number, canvasWidth: number) {
-    const fontSize = 52 * scale;
-    ctx.font = `800 ${fontSize}px "Inter", sans-serif`;
-    
-    // Wrap text
-    // Assume max width is 85% of canvas
-    const maxLineWidth = canvasWidth * 0.85;
-    const words = text.split(''); // Char split for Chinese wrapping
-    let lines = [];
-    let currentLine = words[0];
-
-    for (let i = 1; i < words.length; i++) {
-        const char = words[i];
-        const width = ctx.measureText(currentLine + char).width;
-        if (width < maxLineWidth) {
-            currentLine += char;
-        } else {
-            lines.push(currentLine);
-            currentLine = char;
+    // 5. Product Name (Interactive)
+    if (layout.mealType && layout.mealType.visible) {
+        const cx = layout.mealType.x * w;
+        const cy = layout.mealType.y * h;
+        const s = layout.mealType.scale;
+        
+        const fontSize = 42 * s * (w/1000);
+        ctx.fillStyle = "#1f2937"; // Dark gray
+        ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+        ctx.textBaseline = "top";
+        ctx.textAlign = "left";
+        
+        const text = layout.mealType.text || analysis.summary;
+        // Wrap title if it's too long
+        const maxTitleW = w - (w*0.05) - cx; // From x to right edge
+        const words = text.split(" ");
+        let line = "";
+        let dy = cy;
+        
+        for (let i = 0; i < words.length; i++) {
+            const testLine = line + words[i] + " ";
+            if (ctx.measureText(testLine).width > maxTitleW && i > 0) {
+                ctx.fillText(line, cx, dy);
+                line = words[i] + " ";
+                dy += fontSize * 1.2;
+            } else {
+                line = testLine;
+            }
         }
+        ctx.fillText(line, cx, dy);
+        
+        regions.push({
+            id: 'title',
+            type: 'title',
+            x: cx,
+            y: cy,
+            w: maxTitleW,
+            h: (dy - cy) + fontSize
+        });
     }
-    lines.push(currentLine);
 
-    // Calculate total height
-    const lineHeight = fontSize * 1.3;
-    const totalHeight = lines.length * lineHeight;
-    
-    // Draw from bottom up
-    const startY = bottomY - totalHeight;
-    const padding = 16 * scale;
+    // 6. Branding Element "scored by [Logo] AI Cal" (Interactive)
+    if (layout.branding && layout.branding.visible) {
+        const cx = layout.branding.x * w;
+        const cy = layout.branding.y * h;
+        const s = layout.branding.scale;
+        
+        const fontSize = 24 * s * (w/1000);
+        ctx.font = `500 ${fontSize}px Inter, sans-serif`;
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        
+        // Measure components
+        const prefix = "scored by ";
+        const brandName = "AI Cal";
+        const prefixMetrics = ctx.measureText(prefix);
+        const brandMetrics = ctx.measureText(brandName);
+        const logoSize = fontSize * 1.8;
+        const spacing = fontSize * 0.4;
+        
+        const totalW = prefixMetrics.width + spacing + logoSize + spacing + brandMetrics.width;
+        
+        // Draw logic centered on cx, cy
+        const startX = cx - (totalW / 2);
+        
+        // Draw "scored by"
+        ctx.fillStyle = "#9ca3af"; // Gray
+        ctx.textAlign = "left";
+        ctx.fillText(prefix, startX, cy);
+        
+        // Draw Logo (Apple Icon)
+        const logoX = startX + prefixMetrics.width + spacing;
+        drawAppleLogo(ctx, logoX, cy - (logoSize*0.45), logoSize, "#111827");
+        
+        // Draw "AI Cal"
+        const brandX = logoX + logoSize + spacing;
+        ctx.fillStyle = "#111827"; // Black
+        ctx.font = `800 ${fontSize}px Inter, sans-serif`;
+        ctx.fillText(brandName, brandX, cy);
+        
+        // Horizontal Line (Optional styling visual container)
+        // Let's draw faint lines extending out? 
+        // No, keep it clean as requested.
+        
+        regions.push({
+            id: 'branding',
+            type: 'branding',
+            x: startX,
+            y: cy - fontSize,
+            w: totalW,
+            h: fontSize * 2
+        });
+    }
 
-    // Draw Background/Shadow
-    // We'll use a strong drop shadow logic like TikTok subtitles: Black stroke + Shadow
+    // --- Analysis Card (List Style) ---
+    if (layout.card && layout.card.visible) {
+        const cx = layout.card.x * w; 
+        const cy = layout.card.y * h;
+        const s = layout.card.scale;
+        
+        const cardW = w * 0.92;
+        
+        const baseFontSize = 32 * s * (w/1000);
+        const titleColor = "#111827";
+        const bodyColor = "#4b5563";
+        
+        // -- Prepare List Items --
+        const items = [];
+        
+        // Item 1: Main Gemini Analysis
+        items.push({
+            score: (analysis.healthScore || 5) * 10,
+            scoreColor: scoreColor,
+            ringColor: scoreRingColor,
+            title: rating.title || "Nutritional Analysis",
+            text: rating.description
+        });
+        
+        // Item 2: Protein Highlight (if significant)
+        if (analysis.nutrition.protein) {
+             items.push({
+                score: 100, // Visual full ring for "Feature"
+                label: "PRO",
+                scoreColor: "#3b82f6", // Blue
+                ringColor: "#bfdbfe",
+                title: "Protein Content",
+                text: `${analysis.nutrition.protein} of protein. A key macronutrient for muscle repair and satiety.`
+            });
+        }
+        
+        // Start Drawing List
+        const listStartX = cx + (cardW * 0.05);
+        let currentY = cy + (cardW * 0.08); // Top padding inside card
+        
+        // Card Background (Preliminary draw to be behind text)
+        ctx.save();
+        
+        // Shadow & Box
+        ctx.shadowColor = "rgba(0,0,0,0.06)";
+        ctx.shadowBlur = 30;
+        ctx.shadowOffsetY = 10;
+        ctx.fillStyle = "#ffffff";
+        
+        ctx.beginPath();
+        ctx.roundRect(cx, cy, cardW, h - cy - (w*0.05), w * 0.05);
+        ctx.fill();
+        ctx.shadowColor = "transparent"; // Reset
+        
+        // Card Title
+        ctx.font = `800 ${baseFontSize * 1.2}px Inter, sans-serif`;
+        ctx.fillStyle = "#111827";
+        ctx.textAlign = "left";
+        ctx.fillText("✨ ANALYSIS", listStartX, currentY);
+        currentY += (baseFontSize * 2);
+        
+        // Draw Items
+        const ringSize = w * 0.14;
+        const textStartX = listStartX + ringSize + (w * 0.04);
+        const maxTextW = (cx + cardW) - textStartX - (cardW * 0.05);
+        
+        items.forEach(item => {
+            const itemStartY = currentY;
+            
+            // 1. Draw Ring
+            const ringX = listStartX + ringSize/2;
+            const ringY = itemStartY + ringSize/2;
+            const radius = ringSize * 0.45;
+            
+            // Background Ring
+            ctx.beginPath();
+            ctx.arc(ringX, ringY, radius, 0, Math.PI * 2);
+            ctx.strokeStyle = item.ringColor || "#e5e7eb";
+            ctx.lineWidth = radius * 0.2;
+            ctx.stroke();
+            
+            // Foreground Ring (Arc)
+            const scorePct = item.score / 100;
+            ctx.beginPath();
+            ctx.arc(ringX, ringY, radius, -Math.PI/2, (-Math.PI/2) + (Math.PI * 2 * scorePct));
+            ctx.strokeStyle = item.scoreColor;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+            
+            // Center Text
+            ctx.fillStyle = "#111827";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            if (item.label) {
+                 ctx.font = `bold ${radius * 0.6}px Inter, sans-serif`;
+                 ctx.fillText(item.label, ringX, ringY);
+            } else {
+                 ctx.font = `bold ${radius * 0.8}px Inter, sans-serif`;
+                 ctx.fillText(`${item.score}`, ringX, ringY);
+            }
+
+            // 2. Draw Text Content
+            ctx.textAlign = "left";
+            ctx.textBaseline = "top";
+            
+            // Title
+            let textY = itemStartY + (w*0.01);
+            ctx.font = `bold ${baseFontSize}px Inter, sans-serif`;
+            ctx.fillStyle = titleColor;
+            ctx.fillText(item.title, textStartX, textY);
+            textY += (baseFontSize * 1.4);
+            
+            // Body
+            ctx.font = `400 ${baseFontSize * 0.85}px Inter, sans-serif`;
+            ctx.fillStyle = bodyColor;
+            
+            const words = item.text.split(" ");
+            let line = "";
+            for (let i = 0; i < words.length; i++) {
+                const testLine = line + words[i] + " ";
+                if (ctx.measureText(testLine).width > maxTextW && i > 0) {
+                    ctx.fillText(line, textStartX, textY);
+                    line = words[i] + " ";
+                    textY += (baseFontSize * 1.2);
+                } else {
+                    line = testLine;
+                }
+            }
+            ctx.fillText(line, textStartX, textY);
+            
+            // Advance Y
+            const itemContentH = textY - itemStartY + (baseFontSize * 1.2);
+            const minItemH = ringSize + (w*0.04);
+            currentY += Math.max(itemContentH, minItemH);
+        });
+
+        regions.push({
+            id: 'card',
+            type: 'card',
+            x: cx,
+            y: cy,
+            w: cardW,
+            h: currentY - cy 
+        });
+        
+        ctx.restore();
+    }
     
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    
+    return regions; 
+}
+
+function drawAppleLogo(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
     ctx.save();
+    ctx.translate(x, y);
+    const scale = size / 100;
+    ctx.scale(scale, scale);
     
-    // Strong stroke
-    ctx.lineJoin = "round";
-    ctx.miterLimit = 2;
-    ctx.strokeStyle = "rgba(0,0,0,0.8)";
-    ctx.lineWidth = 8 * scale;
-    
-    // Soft Shadow
-    ctx.shadowColor = "rgba(0,0,0,0.9)";
-    ctx.shadowBlur = 8 * scale;
-    ctx.shadowOffsetY = 4 * scale;
-
-    lines.forEach((line, index) => {
-        const y = startY + (index * lineHeight);
-        ctx.strokeText(line, centerX, y);
-    });
-    
-    // Fill text (Yellow or White) - Let's use a Punchy Yellow/White gradient or just White
-    ctx.shadowColor = "transparent"; // Reset shadow for fill
-    ctx.fillStyle = "#FFDD00"; // Iconic bright yellow often used in viral caps
-    // Alternatively #FFFFFF is cleaner. Let's go with White for universal appeal, or Yellow for attention.
-    // Let's use White text with yellow highlight keywords? Too complex.
-    // Simple White.
-    ctx.fillStyle = "#FFFFFF";
-    
-    lines.forEach((line, index) => {
-        const y = startY + (index * lineHeight);
-        ctx.fillText(line, centerX, y);
-    });
-
-    ctx.restore();
-
-    // Return bbox
-    return {
-        x: centerX - maxLineWidth/2,
-        y: startY,
-        w: maxLineWidth,
-        h: totalHeight
-    };
-}
-
-
-function measureLabelText(ctx: CanvasRenderingContext2D, text: string, scale: number, isTextOnly: boolean) {
-    const lines = text.split('\n');
-    const fontSize = 28 * scale;
-    
-    if (lines.length > 1) {
-        ctx.font = isTextOnly 
-          ? `800 ${fontSize}px Inter, sans-serif`
-          : `600 ${fontSize}px Inter, sans-serif`;
-        const m1 = ctx.measureText(lines[0]);
-        const subFontSize = fontSize * 0.7; 
-        ctx.font = isTextOnly 
-          ? `600 ${subFontSize}px Inter, sans-serif`
-          : `500 ${subFontSize}px Inter, sans-serif`;
-        const m2 = ctx.measureText(lines[1]);
-        const maxW = Math.max(m1.width, m2.width);
-        const paddingX = isTextOnly ? 4 * scale : 20 * scale;
-        const w = maxW + (paddingX * 2);
-        const h = (fontSize * 1.3) + (subFontSize * 1.4);
-        return { w, h };
-    }
-
-    ctx.font = isTextOnly 
-      ? `800 ${fontSize}px Inter, sans-serif`
-      : `600 ${fontSize}px Inter, sans-serif`;
-    const metrics = ctx.measureText(text);
-    const paddingX = isTextOnly ? 4 * scale : 16 * scale;
-    const w = metrics.width + (paddingX * 2);
-    const h = fontSize * 1.6;
-    return { w, h };
-}
-
-function drawLabelPillInternal(ctx: CanvasRenderingContext2D, text: string, centerX: number, centerY: number, scale: number) {
-  const { w, h } = measureLabelText(ctx, text, scale, false);
-  const lines = text.split('\n');
-  const r = lines.length > 1 ? 16 * scale : h / 2;
-  const x = centerX - w / 2;
-  const y = centerY - h / 2;
-
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.3)";
-  ctx.shadowBlur = 8 * scale;
-  ctx.shadowOffsetY = 4 * scale;
-
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, r);
-  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
-  ctx.fill();
-  ctx.restore();
-
-  const fontSize = 28 * scale;
-  
-  if (lines.length > 1) {
-      const subFontSize = fontSize * 0.7;
-      ctx.font = `600 ${fontSize}px Inter, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
-      ctx.fillStyle = "#111827";
-      ctx.fillText(lines[0], centerX, centerY - 2 * scale);
-      
-      ctx.font = `500 ${subFontSize}px Inter, sans-serif`;
-      ctx.textBaseline = "top";
-      ctx.fillStyle = "#4b5563"; 
-      ctx.fillText(lines[1], centerX, centerY + 2 * scale);
-
-  } else {
-      ctx.font = `600 ${fontSize}px Inter, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = "#111827";
-      ctx.fillText(text, centerX, centerY);
-  }
-
-  return { x, y, w, h };
-}
-
-function drawLabelTextOnlyInternal(ctx: CanvasRenderingContext2D, text: string, centerX: number, centerY: number, scale: number) {
-  const { w, h } = measureLabelText(ctx, text, scale, true);
-  const x = centerX - w / 2;
-  const y = centerY - h / 2;
-  
-  ctx.save();
-  const fontSize = 28 * scale;
-  const lines = text.split('\n');
-  ctx.textAlign = "center";
-  
-  if (lines.length > 1) {
-      const subFontSize = fontSize * 0.7;
-      ctx.lineJoin = "round";
-      ctx.miterLimit = 2;
-
-      const y1 = centerY - 2 * scale;
-      ctx.font = `800 ${fontSize}px Inter, sans-serif`;
-      ctx.textBaseline = "bottom";
-      
-      ctx.shadowColor = "transparent";
-      ctx.lineWidth = 4 * scale;
-      ctx.strokeStyle = "rgba(0,0,0,0.8)";
-      ctx.strokeText(lines[0], centerX, y1);
-      
-      ctx.shadowColor = "rgba(0,0,0,0.6)";
-      ctx.shadowBlur = 6 * scale;
-      ctx.shadowOffsetY = 2 * scale;
-      ctx.fillStyle = "white";
-      ctx.fillText(lines[0], centerX, y1);
-
-      const y2 = centerY + 2 * scale;
-      ctx.font = `600 ${subFontSize}px Inter, sans-serif`; 
-      ctx.textBaseline = "top";
-      
-      ctx.shadowColor = "transparent";
-      ctx.lineWidth = 3 * scale;
-      ctx.strokeStyle = "rgba(0,0,0,0.8)";
-      ctx.strokeText(lines[1], centerX, y2);
-      
-      ctx.shadowColor = "rgba(0,0,0,0.6)";
-      ctx.fillStyle = "#f3f4f6"; 
-      ctx.fillText(lines[1], centerX, y2);
-
-  } else {
-      ctx.font = `800 ${fontSize}px Inter, sans-serif`;
-      ctx.textBaseline = "middle";
-      ctx.lineWidth = 4 * scale;
-      ctx.strokeStyle = "rgba(0,0,0,0.8)";
-      ctx.lineJoin = "round";
-      ctx.miterLimit = 2;
-      ctx.strokeText(text, centerX, centerY);
-      ctx.shadowColor = "rgba(0,0,0,0.6)";
-      ctx.shadowBlur = 6 * scale;
-      ctx.shadowOffsetY = 2 * scale;
-      ctx.fillStyle = "white";
-      ctx.fillText(text, centerX, centerY);
-  }
-  ctx.restore();
-  return { x, y, w, h };
-}
-
-function drawMealTypeInternal(ctx: CanvasRenderingContext2D, text: string, centerX: number, topY: number, scale: number) {
-  const fontSize = 80 * scale;
-  ctx.font = `bold ${fontSize}px Inter, sans-serif`;
-  const metrics = ctx.measureText(text);
-  const w = metrics.width;
-  const h = fontSize; 
-  const x = centerX - w/2;
-  const y = topY;
-
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.5)";
-  ctx.shadowBlur = 10 * scale;
-  ctx.shadowOffsetY = 2 * scale;
-  ctx.fillStyle = "white";
-  ctx.fillText(text, centerX, topY);
-  ctx.restore();
-  return { x, y, w, h };
-}
-
-function drawNutritionCardInternal(ctx: CanvasRenderingContext2D, analysis: FoodAnalysis, leftX: number, topY: number, scale: number) {
-  const cardW = 540 * scale; 
-  const headerH = 70 * scale; 
-  const baseH = 260 * scale;
-  const cardH = baseH + headerH; 
-  const r = 24 * scale;
-  const x = leftX;
-  const y = topY;
-
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.15)";
-  ctx.shadowBlur = 20 * scale;
-  ctx.shadowOffsetY = 10 * scale;
-  ctx.fillStyle = "white";
-  ctx.beginPath();
-  ctx.roundRect(x, y, cardW, cardH, r);
-  ctx.fill();
-  ctx.shadowColor = "transparent";
-
-  const paddingX = 24 * scale;
-  const paddingY = 24 * scale;
-
-  drawCardBranding(ctx, x + paddingX, y + paddingY, scale);
-
-  const contentStartY = y + paddingY + headerH;
-  
-  // Badges
-  if (analysis.healthScore !== undefined) {
-      const score = analysis.healthScore;
-      const badgeW = 90 * scale;
-      const badgeH = 36 * scale;
-      const badgeX = x + cardW - paddingX - badgeW;
-      const badgeY = contentStartY;
-      let badgeColor = "#22c55e"; 
-      let badgeBg = "#f0fdf4";
-      let badgeText = "#15803d";
-      if (score < 7) { badgeColor = "#f97316"; badgeBg = "#fff7ed"; badgeText = "#c2410c"; }
-      if (score < 4) { badgeColor = "#ef4444"; badgeBg = "#fef2f2"; badgeText = "#b91c1c"; }
-      
-      ctx.fillStyle = badgeBg;
-      ctx.strokeStyle = badgeColor;
-      ctx.lineWidth = 1.5 * scale;
-      ctx.beginPath();
-      ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeH/2);
-      ctx.fill();
-      ctx.stroke();
-      
-      ctx.font = `bold ${16 * scale}px Inter, sans-serif`;
-      ctx.fillStyle = badgeText;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`Health: ${score}`, badgeX + badgeW/2, badgeY + badgeH/2 + 1*scale);
-  } else {
-      const badgeW = 70 * scale;
-      const badgeH = 36 * scale;
-      const badgeX = x + cardW - paddingX - badgeW;
-      const badgeY = contentStartY;
-      ctx.strokeStyle = "#111827";
-      ctx.lineWidth = 1.5 * scale;
-      ctx.beginPath();
-      ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeH/2);
-      ctx.stroke();
-      ctx.font = `600 ${16 * scale}px Inter, sans-serif`;
-      ctx.fillStyle = "#111827";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`${analysis.items.length} 🥣`, badgeX + badgeW/2, badgeY + badgeH/2 + 2*scale);
-  }
-
-  // Summary Text
-  const titleW = cardW - paddingX * 2 - 90 * scale - 16 * scale;
-  ctx.font = `600 ${22 * scale}px Inter, sans-serif`; 
-  ctx.fillStyle = "#1f2937"; 
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  
-  const words = analysis.summary.split(" ");
-  let line1 = "";
-  let line2 = "";
-  let currentLine = 1;
-  
-  for (let word of words) {
-    const testLine = line1 + word + " ";
-    const metrics = ctx.measureText(testLine);
-    if (metrics.width > titleW && currentLine === 1) {
-      currentLine = 2;
-      line2 = word + " ";
-    } else if (currentLine === 1) {
-      line1 = testLine;
-    } else {
-       const testLine2 = line2 + word + " ";
-       if(ctx.measureText(testLine2).width < titleW) {
-          line2 = testLine2;
-       } else {
-          line2 = line2.trim() + "...";
-          break;
-       }
-    }
-  }
-  
-  let currentY = contentStartY;
-  ctx.fillText(line1, x + paddingX, currentY);
-  currentY += 28 * scale;
-  if (line2) { ctx.fillText(line2, x + paddingX, currentY); currentY += 28 * scale; }
-  
-  if (analysis.healthTag) {
-      if (!line2) currentY += 4 * scale; 
-      ctx.font = `500 ${15 * scale}px Inter, sans-serif`;
-      ctx.fillStyle = "#059669"; 
-      ctx.fillText(`✨ ${analysis.healthTag}`, x + paddingX, currentY + 4 * scale);
-  }
-
-  const titleHeightBlock = line2 ? 56 * scale : 28 * scale;
-  let calY = contentStartY + titleHeightBlock + 16 * scale;
-  if (analysis.healthTag) { calY = Math.max(calY, currentY + 24 * scale); }
-  
-  const calH = 64 * scale; 
-  const calW = cardW - paddingX * 2;
-  
-  ctx.fillStyle = "#f0fdf4"; 
-  ctx.strokeStyle = "#dcfce7"; 
-  ctx.lineWidth = 1.5 * scale;
-  ctx.beginPath();
-  ctx.roundRect(x + paddingX, calY, calW, calH, 16 * scale);
-  ctx.fill();
-  ctx.stroke();
-  
-  ctx.font = `bold ${28 * scale}px Inter, sans-serif`;
-  ctx.fillStyle = "#111827";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText(`🔥 ${analysis.nutrition.calories} Kcal`, x + paddingX + 24 * scale, calY + calH/2 + 2*scale);
-
-  const macroY = calY + calH + 16 * scale;
-  const macroH = 80 * scale; 
-  const gap = 12 * scale;
-  const macroW = (calW - gap * 2) / 3;
-  
-  drawNewMacroCard(ctx, "Carbs", analysis.nutrition.carbs, "🌾", "#f0fdf4", "#16a34a", x + paddingX, macroY, macroW, macroH, scale);
-  drawNewMacroCard(ctx, "Protein", analysis.nutrition.protein, "🥚", "#fffbeb", "#d97706", x + paddingX + macroW + gap, macroY, macroW, macroH, scale);
-  drawNewMacroCard(ctx, "Fat", analysis.nutrition.fat, "🥩", "#fef2f2", "#dc2626", x + paddingX + (macroW + gap) * 2, macroY, macroW, macroH, scale);
-
-  ctx.restore();
-  return { x, y, w: cardW, h: cardH };
-}
-
-function drawCardBranding(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
-  const iconSize = 32 * scale;
-  ctx.fillStyle = "black";
-  ctx.beginPath();
-  ctx.roundRect(x, y, iconSize, iconSize, 8 * scale);
-  ctx.fill();
-  ctx.fillStyle = "white";
-  ctx.font = `bold ${12 * scale}px Inter, sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("AI", x + iconSize/2, y + iconSize/2 + 1*scale);
-  ctx.fillStyle = "#111827";
-  ctx.font = `bold ${20 * scale}px Inter, sans-serif`;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText("AI Cal", x + iconSize + 10 * scale, y + iconSize/2);
-}
-
-function drawNewMacroCard(ctx: CanvasRenderingContext2D, label: string, value: string, icon: string, bgColor: string, accentColor: string, x: number, y: number, w: number, h: number, scale: number) {
-    ctx.fillStyle = bgColor;
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.roundRect(x, y, w, h, 12 * scale);
+    // Simplified Apple shape approximation
+    ctx.moveTo(50, 25);
+    ctx.bezierCurveTo(40, 25, 35, 30, 25, 30);
+    ctx.bezierCurveTo(10, 30, 0, 45, 0, 65);
+    ctx.bezierCurveTo(0, 85, 15, 100, 30, 100);
+    ctx.bezierCurveTo(40, 100, 45, 95, 50, 95);
+    ctx.bezierCurveTo(55, 95, 60, 100, 70, 100);
+    ctx.bezierCurveTo(85, 100, 100, 85, 100, 65);
+    ctx.bezierCurveTo(100, 50, 90, 40, 80, 35);
+    ctx.bezierCurveTo(80, 35, 75, 45, 75, 55);
+    ctx.bezierCurveTo(75, 70, 85, 75, 90, 75);
+    ctx.bezierCurveTo(88, 85, 80, 95, 70, 95);
+    ctx.bezierCurveTo(65, 95, 60, 90, 50, 90);
+    ctx.bezierCurveTo(40, 90, 35, 95, 30, 95);
+    ctx.bezierCurveTo(20, 95, 10, 80, 10, 65);
+    ctx.bezierCurveTo(10, 50, 20, 35, 35, 35);
+    ctx.bezierCurveTo(40, 35, 45, 40, 50, 40);
+    ctx.bezierCurveTo(55, 40, 60, 35, 65, 35);
+    ctx.bezierCurveTo(75, 35, 85, 40, 90, 45);
     ctx.fill();
-    ctx.font = `${16 * scale}px Inter, sans-serif`;
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillStyle = "#111827";
-    ctx.fillText(icon, x + 10 * scale, y + 10 * scale);
+    
+    // Leaf
+    ctx.beginPath();
+    ctx.moveTo(50, 20);
+    ctx.bezierCurveTo(50, 10, 60, 0, 70, 0);
+    ctx.bezierCurveTo(60, 0, 50, 10, 50, 20);
+    ctx.bezierCurveTo(50, 20, 40, 20, 40, 20); // Stem base
+    // Actually simplified leaf:
+    ctx.ellipse(60, 10, 12, 6, -Math.PI/4, 0, Math.PI*2);
+    ctx.fill();
+    
+    ctx.restore();
+}
+
+function drawMacroMini(ctx: CanvasRenderingContext2D, label: string, val: string, x: number, y: number, w: number, h: number, scale: number) {
+    ctx.fillStyle = "#f9fafb";
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, 8 * scale * 4); 
+    ctx.fill();
+    
     ctx.fillStyle = "#6b7280";
-    ctx.font = `600 ${11 * scale}px Inter, sans-serif`;
-    ctx.fillText(label.toUpperCase(), x + 34 * scale, y + 11 * scale);
+    ctx.font = `600 ${28 * scale}px Inter, sans-serif`; 
+    ctx.textAlign = "left";
+    ctx.fillText(label.toUpperCase(), x + (24*scale), y + (24*scale));
+    
     ctx.fillStyle = "#111827";
-    ctx.font = `bold ${18 * scale}px Inter, sans-serif`;
-    ctx.textBaseline = "bottom";
-    ctx.fillText(value, x + 10 * scale, y + h - 10 * scale);
+    ctx.font = `bold ${42 * scale}px Inter, sans-serif`;
+    ctx.fillText(val, x + (24*scale), y + h - (24*scale));
 }
 
 export const getInitialLayout = (
@@ -625,17 +537,37 @@ export const getInitialLayout = (
   const defaultLabelScale = config?.defaultLabelScale ?? 1.0;
   const defaultLabelStyle = config?.defaultLabelStyle ?? 'default';
 
-  // --- Layout Elements ---
+  // --- Standard Mode Defaults ---
   const titleX = config?.defaultTitlePos?.x !== undefined ? config.defaultTitlePos.x / 100 : 0.5;
   const titleY = config?.defaultTitlePos?.y !== undefined ? config.defaultTitlePos.y / 100 : 0.08;
 
+  // --- Rating Mode Defaults ---
+  // Side-by-side header layout positions
+  const ratingScoreX = 0.52;
+  const ratingScoreY = 0.05; 
+  
+  const ratingVerdictX = 0.52;
+  const ratingVerdictY = 0.16; 
+  
+  const ratingTitleX = 0.52;
+  const ratingTitleY = 0.26; 
+  
+  const ratingCardY = 0.35; 
+  
+  const ratingBrandingY = 0.305; // Between header and card
+
   const mealType: ElementState = {
-    x: titleX,
-    y: titleY,
+    x: ratingTitleX, 
+    y: ratingTitleY,
     scale: defaultTitleScale, 
     text: analysis.mealType,
     visible: true
   };
+  
+  if (config?.defaultTitlePos) {
+      mealType.x = config.defaultTitlePos.x / 100;
+      mealType.y = config.defaultTitlePos.y / 100;
+  }
 
   const cardScaleRef = imgWidth / 1200;
   let cardX, cardY;
@@ -653,19 +585,39 @@ export const getInitialLayout = (
   }
 
   const card: ElementState = {
-    x: cardX,
-    y: cardY,
+    x: 0.04, 
+    y: ratingCardY,
     scale: defaultCardScale,
     visible: true
   };
 
-  // Caption Position (Bottom 25%)
   const caption: ElementState = {
       x: 0.5,
-      y: 0.85, // Positioned near bottom
+      y: 0.85, 
       scale: 1.0,
       visible: true,
-      text: "" // Initially empty, filled via Viral logic later or manually
+      text: "" 
+  };
+  
+  const score: ElementState = {
+      x: ratingScoreX,
+      y: ratingScoreY,
+      scale: 1.0,
+      visible: true
+  };
+  
+  const verdict: ElementState = {
+      x: ratingVerdictX,
+      y: ratingVerdictY,
+      scale: 1.0,
+      visible: true
+  };
+  
+  const branding: ElementState = {
+      x: 0.5,
+      y: ratingBrandingY,
+      scale: 1.0,
+      visible: true
   };
 
   const seenNames = new Set<string>();
@@ -712,7 +664,7 @@ export const getInitialLayout = (
      });
   }
 
-  return { mealType, card, labels, caption };
+  return { mealType, card, labels, caption, score, verdict, branding };
 };
 
 export const resizeImage = async (file: File, maxDimension: number = 1024, cropTo9_16: boolean = false): Promise<{ base64: string, mimeType: string }> => {
@@ -773,4 +725,296 @@ export const resizeImage = async (file: File, maxDimension: number = 1024, cropT
       img.onerror = (e) => { URL.revokeObjectURL(objectUrl); reject(e); };
       img.src = objectUrl;
     });
-  };
+};
+
+function drawCaptionInternal(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    scale: number,
+    maxWidth: number
+): { x: number, y: number, w: number, h: number } {
+    const fontSize = 48 * scale;
+    ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    
+    // Simple wrap logic
+    const lines: string[] = [];
+    let line = '';
+    const safeWidth = maxWidth * 0.9;
+    
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        const testLine = line + char;
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > safeWidth && i > 0) {
+            lines.push(line);
+            line = char;
+        } else {
+            line = testLine;
+        }
+    }
+    lines.push(line);
+
+    const lineHeight = fontSize * 1.3;
+    const totalHeight = lines.length * lineHeight;
+    
+    ctx.shadowColor = "rgba(0,0,0,0.8)";
+    ctx.shadowBlur = 4;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "black";
+    ctx.fillStyle = "white"; 
+    
+    let currentY = y - (totalHeight / 2) + (lineHeight / 2);
+    
+    lines.forEach(l => {
+        ctx.strokeText(l, x, currentY);
+        ctx.fillText(l, x, currentY);
+        currentY += lineHeight;
+    });
+    
+    ctx.shadowColor = "transparent";
+    
+    return {
+        x: x - safeWidth/2,
+        y: y - totalHeight/2,
+        w: safeWidth,
+        h: totalHeight
+    };
+}
+
+function drawMealTypeInternal(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    scale: number
+): { x: number, y: number, w: number, h: number } {
+    const fontSize = 60 * scale;
+    ctx.font = `800 ${fontSize}px Inter, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    
+    const metrics = ctx.measureText(text.toUpperCase());
+    const w = metrics.width;
+    const h = fontSize;
+    
+    ctx.fillStyle = "white";
+    ctx.shadowColor = "rgba(0,0,0,0.5)";
+    ctx.shadowBlur = 10;
+    
+    ctx.fillText(text.toUpperCase(), x, y);
+    ctx.shadowColor = "transparent";
+    
+    return { x: x - w/2, y: y, w, h };
+}
+
+function drawLabelTextOnlyInternal(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    scale: number
+): { x: number, y: number, w: number, h: number } {
+    const fontSize = 32 * scale;
+    ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    
+    const metrics = ctx.measureText(text);
+    const w = metrics.width;
+    const h = fontSize;
+    
+    ctx.shadowColor = "rgba(0,0,0,0.8)";
+    ctx.shadowBlur = 4;
+    ctx.fillStyle = "white";
+    ctx.fillText(text, x, y);
+    ctx.shadowColor = "transparent";
+    
+    return { x: x - w/2, y: y - h/2, w, h };
+}
+
+function drawLabelPillInternal(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    scale: number
+): { x: number, y: number, w: number, h: number } {
+    const fontSize = 28 * scale;
+    ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+    const metrics = ctx.measureText(text);
+    const paddingX = 16 * scale;
+    const paddingY = 8 * scale;
+    const w = metrics.width + paddingX * 2;
+    const h = fontSize + paddingY * 2;
+    
+    ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.shadowColor = "rgba(0,0,0,0.2)";
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.roundRect(x - w/2, y - h/2, w, h, h/2);
+    ctx.fill();
+    ctx.shadowColor = "transparent";
+    
+    ctx.fillStyle = "#111827"; 
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y + (scale * 2)); 
+    
+    return { x: x - w/2, y: y - h/2, w, h };
+}
+
+function drawNutritionCardInternal(
+    ctx: CanvasRenderingContext2D,
+    analysis: FoodAnalysis,
+    x: number,
+    y: number,
+    scale: number
+): { x: number, y: number, w: number, h: number } {
+    const baseW = 300; 
+    const w = baseW * scale;
+    
+    const padding = 20 * scale;
+    const titleSize = 24 * scale;
+    const calSize = 56 * scale;
+    const macroLabelSize = 14 * scale;
+    const macroValSize = 18 * scale;
+    
+    // Estimate height
+    const h = (padding * 2) + titleSize + (10*scale) + calSize + (10*scale) + (40*scale); 
+    
+    // Draw Card Background
+    ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+    ctx.shadowColor = "rgba(0,0,0,0.15)";
+    ctx.shadowBlur = 20;
+    ctx.shadowOffsetY = 10;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, 16 * scale);
+    ctx.fill();
+    ctx.shadowColor = "transparent";
+    
+    // Draw Title (Summary)
+    ctx.fillStyle = "#374151";
+    ctx.font = `600 ${titleSize}px Inter, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(analysis.summary || "Food Analysis", x + padding, y + padding);
+    
+    // Draw Calories
+    ctx.fillStyle = "#111827";
+    ctx.font = `800 ${calSize}px Inter, sans-serif`;
+    const calText = `${analysis.nutrition.calories}`;
+    ctx.fillText(calText, x + padding, y + padding + titleSize + (10*scale));
+    
+    const calMetrics = ctx.measureText(calText);
+    ctx.font = `500 ${titleSize * 0.6}px Inter, sans-serif`;
+    ctx.fillStyle = "#6b7280";
+    ctx.fillText("kcal", x + padding + calMetrics.width + (8*scale), y + padding + titleSize + (10*scale) + (calSize * 0.5));
+    
+    // Macros Row
+    const macroY = y + h - padding - (40*scale);
+    const colW = (w - (padding*2)) / 3;
+    
+    drawMacroItem(ctx, "PROTEIN", analysis.nutrition.protein, x + padding, macroY, scale, macroLabelSize, macroValSize);
+    drawMacroItem(ctx, "CARBS", analysis.nutrition.carbs, x + padding + colW, macroY, scale, macroLabelSize, macroValSize);
+    drawMacroItem(ctx, "FAT", analysis.nutrition.fat, x + padding + (colW*2), macroY, scale, macroLabelSize, macroValSize);
+    
+    return { x, y, w, h };
+}
+
+function drawMacroItem(ctx: CanvasRenderingContext2D, label: string, val: string, x: number, y: number, scale: number, labelSize: number, valSize: number) {
+    ctx.fillStyle = "#9ca3af";
+    ctx.font = `600 ${labelSize}px Inter, sans-serif`;
+    ctx.fillText(label, x, y);
+    
+    ctx.fillStyle = "#1f2937";
+    ctx.font = `700 ${valSize}px Inter, sans-serif`;
+    ctx.fillText(val, x, y + labelSize + (4*scale));
+}
+
+// --- Exports ---
+
+export async function renderFinalImage(
+    previewUrl: string, 
+    analysis: FoodAnalysis, 
+    layout: ImageLayout
+): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) { reject(new Error("No context")); return; }
+            
+            drawScene(ctx, img, analysis, layout);
+            resolve(canvas.toDataURL('image/jpeg', 0.95));
+        };
+        img.onerror = reject;
+        img.src = previewUrl;
+    });
+}
+
+export async function generateCollage(
+    urls: string[], 
+    config: { width: number, height: number, padding: number, color: string }
+): Promise<string> {
+    const canvas = document.createElement('canvas');
+    canvas.width = config.width;
+    canvas.height = config.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error("No context");
+    
+    ctx.fillStyle = config.color;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    if (urls.length !== 4) throw new Error("Collage requires exactly 4 images");
+    
+    const cellW = (config.width - (config.padding * 3)) / 2;
+    const cellH = (config.height - (config.padding * 3)) / 2;
+    
+    const positions = [
+        { x: config.padding, y: config.padding },
+        { x: config.padding * 2 + cellW, y: config.padding },
+        { x: config.padding, y: config.padding * 2 + cellH },
+        { x: config.padding * 2 + cellW, y: config.padding * 2 + cellH },
+    ];
+    
+    const loadImage = (url: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = url;
+    });
+    
+    try {
+        const images = await Promise.all(urls.map(loadImage));
+        
+        images.forEach((img, i) => {
+            const pos = positions[i];
+            const ratio = Math.max(cellW / img.width, cellH / img.height);
+            const sw = cellW / ratio;
+            const sh = cellH / ratio;
+            const sx = (img.width - sw) / 2;
+            const sy = (img.height - sh) / 2;
+            
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(pos.x, pos.y, cellW, cellH);
+            ctx.clip();
+            ctx.drawImage(img, sx, sy, sw, sh, pos.x, pos.y, cellW, cellH);
+            ctx.restore();
+        });
+        
+        return canvas.toDataURL('image/jpeg', 0.95);
+    } catch (e) {
+        console.error("Failed to generate collage", e);
+        throw e;
+    }
+}

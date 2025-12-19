@@ -12,6 +12,13 @@ export interface NutritionInfo {
   totalWeight?: string;
 }
 
+export interface RatingInfo {
+    score: number; // 0-100
+    verdict: string; // e.g., "Acceptable", "Excellent", "Avoid"
+    title: string; // e.g., "High Protein Support"
+    description: string; // Detailed analysis paragraph
+}
+
 export interface FoodAnalysis {
   isFood: boolean;
   hasExistingText: boolean;
@@ -21,6 +28,7 @@ export interface FoodAnalysis {
   summary: string;
   healthScore?: number; // 1-10 scale
   healthTag?: string; // Short health benefit description
+  rating?: RatingInfo; // New field for Rating Mode
 }
 
 // --- Layout Types ---
@@ -46,7 +54,11 @@ export interface ImageLayout {
   card: ElementState;
   mealType: ElementState;
   labels: LabelState[];
-  caption?: ElementState; // New: For Viral Text
+  caption?: ElementState; // For Viral Text
+  score?: ElementState; // New: For Rating Score
+  verdict?: ElementState; // New: For Rating Verdict
+  branding?: ElementState; // New: For "Scored by AI Cal"
+  mode?: 'food' | 'viral' | 'rating' | 'collage'; // Track layout mode
 }
 
 export interface LayoutConfig {
@@ -71,11 +83,12 @@ export interface ProcessedImage {
   error?: string;
   driveFileId?: string; // ID of the original file if imported from Google Drive
   viralStep?: number; // 1-6 for the Viral Story Mode
+  mode: 'food' | 'viral' | 'collage' | 'rating'; // The mode this image belongs to
 }
 
 export interface HitRegion {
   id: number | string;
-  type: 'card' | 'title' | 'label' | 'caption';
+  type: 'card' | 'title' | 'label' | 'caption' | 'score' | 'verdict' | 'branding';
   x: number; // Pixel X on canvas
   y: number; // Pixel Y on canvas
   w: number; // Width in pixels
