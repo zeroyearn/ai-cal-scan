@@ -1,7 +1,16 @@
 
-import { FoodAnalysis, ImageLayout, LayoutConfig, ElementState, LabelState, HitRegion } from "../types";
+
+import { FoodAnalysis, ImageLayout, LayoutConfig, ElementState, LabelState, HitRegion, CardStyle } from "../types";
 
 const CARD_SCALE_MODIFIER = 1.0;
+
+// Helper to convert hex to rgba
+const hexToRgba = (hex: string, alpha: number) => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
 
 export function drawScene(
   ctx: CanvasRenderingContext2D,
@@ -87,7 +96,8 @@ export function drawScene(
       analysis,
       layout.card.x * width,
       layout.card.y * height,
-      layout.card.scale
+      layout.card.scale,
+      layout.cardStyle
     );
     regions.push({
         id: 'card',
@@ -664,7 +674,20 @@ export const getInitialLayout = (
      });
   }
 
-  return { mealType, card, labels, caption, score, verdict, branding };
+  const cardStyle: CardStyle = {
+      bgColor: "#ffffff",
+      textColor: "#1f2937",
+      secondaryColor: "#6b7280",
+      opacity: 0.95,
+      titleScale: 1.0,
+      caloriesScale: 1.0,
+      macrosScale: 1.0,
+      showTitle: true,
+      showMacros: true,
+      cornerRadius: 16
+  };
+
+  return { mealType, card, labels, caption, score, verdict, branding, cardStyle };
 };
 
 export const resizeImage = async (file: File, maxDimension: number = 1024, cropTo9_16: boolean = false): Promise<{ base64: string, mimeType: string }> => {
@@ -872,65 +895,103 @@ function drawNutritionCardInternal(
     analysis: FoodAnalysis,
     x: number,
     y: number,
-    scale: number
+    scale: number,
+    style?: CardStyle
 ): { x: number, y: number, w: number, h: number } {
+    const s = style || {
+        bgColor: "#ffffff",
+        textColor: "#1f2937",
+        secondaryColor: "#6b7280",
+        opacity: 0.95,
+        titleScale: 1.0,
+        caloriesScale: 1.0,
+        macrosScale: 1.0,
+        showTitle: true,
+        showMacros: true,
+        cornerRadius: 16
+    };
+
     const baseW = 300; 
     const w = baseW * scale;
     
     const padding = 20 * scale;
-    const titleSize = 24 * scale;
-    const calSize = 56 * scale;
-    const macroLabelSize = 14 * scale;
-    const macroValSize = 18 * scale;
     
-    // Estimate height
-    const h = (padding * 2) + titleSize + (10*scale) + calSize + (10*scale) + (40*scale); 
+    // Dynamic sizes based on style config
+    const titleSize = 24 * scale * s.titleScale;
+    const calSize = 56 * scale * s.caloriesScale;
+    const macroLabelSize = 14 * scale * s.macrosScale;
+    const macroValSize = 18 * scale * s.macrosScale;
+    
+    // Calculate Height
+    let h = padding; // Top padding
+
+    if (s.showTitle) {
+        h += titleSize + (10 * scale);
+    }
+
+    h += calSize + (10 * scale); // Calories always shown roughly
+
+    if (s.showMacros) {
+        h += (40 * scale * s.macrosScale) + padding; // Space for macros + Bottom padding
+    } else {
+        h += padding; // Just bottom padding
+    }
     
     // Draw Card Background
-    ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+    ctx.fillStyle = hexToRgba(s.bgColor, s.opacity);
     ctx.shadowColor = "rgba(0,0,0,0.15)";
     ctx.shadowBlur = 20;
     ctx.shadowOffsetY = 10;
     ctx.beginPath();
-    ctx.roundRect(x, y, w, h, 16 * scale);
+    // Use dynamic corner radius
+    ctx.roundRect(x, y, w, h, s.cornerRadius * scale);
     ctx.fill();
     ctx.shadowColor = "transparent";
     
+    let currentY = y + padding;
+
     // Draw Title (Summary)
-    ctx.fillStyle = "#374151";
-    ctx.font = `600 ${titleSize}px Inter, sans-serif`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(analysis.summary || "Food Analysis", x + padding, y + padding);
+    if (s.showTitle) {
+        ctx.fillStyle = s.textColor; 
+        ctx.font = `600 ${titleSize}px Inter, sans-serif`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(analysis.summary || "Food Analysis", x + padding, currentY);
+        currentY += titleSize + (10 * scale);
+    }
     
     // Draw Calories
-    ctx.fillStyle = "#111827";
+    ctx.fillStyle = s.textColor;
     ctx.font = `800 ${calSize}px Inter, sans-serif`;
     const calText = `${analysis.nutrition.calories}`;
-    ctx.fillText(calText, x + padding, y + padding + titleSize + (10*scale));
+    ctx.fillText(calText, x + padding, currentY);
     
     const calMetrics = ctx.measureText(calText);
-    ctx.font = `500 ${titleSize * 0.6}px Inter, sans-serif`;
-    ctx.fillStyle = "#6b7280";
-    ctx.fillText("kcal", x + padding + calMetrics.width + (8*scale), y + padding + titleSize + (10*scale) + (calSize * 0.5));
+    ctx.font = `500 ${titleSize * 0.6}px Inter, sans-serif`; 
+    ctx.fillStyle = s.secondaryColor;
+    ctx.fillText("kcal", x + padding + calMetrics.width + (8*scale), currentY + (calSize * 0.5));
     
+    currentY += calSize + (10 * scale);
+
     // Macros Row
-    const macroY = y + h - padding - (40*scale);
-    const colW = (w - (padding*2)) / 3;
-    
-    drawMacroItem(ctx, "PROTEIN", analysis.nutrition.protein, x + padding, macroY, scale, macroLabelSize, macroValSize);
-    drawMacroItem(ctx, "CARBS", analysis.nutrition.carbs, x + padding + colW, macroY, scale, macroLabelSize, macroValSize);
-    drawMacroItem(ctx, "FAT", analysis.nutrition.fat, x + padding + (colW*2), macroY, scale, macroLabelSize, macroValSize);
+    if (s.showMacros) {
+        const macroY = y + h - padding - (macroValSize + macroLabelSize + (4*scale)); 
+        const colW = (w - (padding*2)) / 3;
+        
+        drawMacroItem(ctx, "PROTEIN", analysis.nutrition.protein, x + padding, macroY, scale, macroLabelSize, macroValSize, s.textColor, s.secondaryColor);
+        drawMacroItem(ctx, "CARBS", analysis.nutrition.carbs, x + padding + colW, macroY, scale, macroLabelSize, macroValSize, s.textColor, s.secondaryColor);
+        drawMacroItem(ctx, "FAT", analysis.nutrition.fat, x + padding + (colW*2), macroY, scale, macroLabelSize, macroValSize, s.textColor, s.secondaryColor);
+    }
     
     return { x, y, w, h };
 }
 
-function drawMacroItem(ctx: CanvasRenderingContext2D, label: string, val: string, x: number, y: number, scale: number, labelSize: number, valSize: number) {
-    ctx.fillStyle = "#9ca3af";
+function drawMacroItem(ctx: CanvasRenderingContext2D, label: string, val: string, x: number, y: number, scale: number, labelSize: number, valSize: number, textColor: string, labelColor: string) {
+    ctx.fillStyle = labelColor;
     ctx.font = `600 ${labelSize}px Inter, sans-serif`;
     ctx.fillText(label, x, y);
     
-    ctx.fillStyle = "#1f2937";
+    ctx.fillStyle = textColor;
     ctx.font = `700 ${valSize}px Inter, sans-serif`;
     ctx.fillText(val, x, y + labelSize + (4*scale));
 }

@@ -1,8 +1,9 @@
 
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop, LayoutTemplate, Plus, Eye, EyeOff, Smartphone, LayoutGrid, Zap, ListOrdered, GraduationCap } from 'lucide-react';
-import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion, FoodAnalysis } from './types';
+import { Camera, Upload, Utensils, Download, X, AlertCircle, CheckCircle2, Loader2, Image as ImageIcon, Move, Pencil, SlidersHorizontal, Trash2, Cloud, Settings, Info, Copy, Check, Key, Tag, CloudUpload, Square, CheckSquare, Sparkles, Globe, Trash, Type as TypeIcon, AlertTriangle, Link as LinkIcon, Palette, RotateCcw, BookOpen, Crop, LayoutTemplate, Plus, Eye, EyeOff, Smartphone, LayoutGrid, Zap, ListOrdered, GraduationCap, ChevronDown, ChevronUp } from 'lucide-react';
+import { ProcessedImage, ImageLayout, ElementState, LabelStyle, HitRegion, FoodAnalysis, CardStyle } from './types';
 import { analyzeFoodImage, generateViralCaption } from './services/geminiService';
 import { resizeImage, getInitialLayout, drawScene, renderFinalImage, generateCollage } from './utils/canvasUtils';
 
@@ -71,6 +72,7 @@ function App() {
   const [deleteAfterSave, setDeleteAfterSave] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [autoCrop, setAutoCrop] = useState(false);
+  const [showCardStyleSettings, setShowCardStyleSettings] = useState(false);
 
   // Filter images based on current mode
   const displayedImages = images.filter(img => img.mode === mode);
@@ -453,6 +455,28 @@ function App() {
           else if (target === 'branding' && newLayout.branding) newLayout.branding.visible = visible;
           return { ...img, layout: newLayout };
       }));
+  };
+
+  const handleCardStyleChange = (key: keyof CardStyle, value: any) => {
+    setImages(prev => prev.map(img => {
+        if (img.id !== validSelectedImage?.id || !img.layout) return img;
+        const newLayout = { ...img.layout };
+        // Ensure cardStyle exists
+        const currentStyle = newLayout.cardStyle || {
+             bgColor: "#ffffff",
+            textColor: "#1f2937",
+            secondaryColor: "#6b7280",
+            opacity: 0.95,
+            titleScale: 1.0,
+            caloriesScale: 1.0,
+            macrosScale: 1.0,
+            showTitle: true,
+            showMacros: true,
+            cornerRadius: 16
+        };
+        newLayout.cardStyle = { ...currentStyle, [key]: value };
+        return { ...img, layout: newLayout };
+    }));
   };
 
   const handleDownload = async () => {
@@ -1334,14 +1358,80 @@ function App() {
                                     </div>
                                  )}
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex flex-col gap-4">
                                   {validSelectedImage.layout.card.visible ? (
                                     <>
-                                      <div className="flex-1 flex flex-col gap-1">
-                                          <div className="flex justify-between text-xs font-medium text-gray-600"><span>Nutrition Card Size</span><span>{Math.round(validSelectedImage.layout.card.scale * 100)}%</span></div>
-                                          <input type="range" min="0" max="20" step="0.1" value={validSelectedImage.layout.card.scale} onChange={(e) => handleScaleChange('card', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+                                      <div className="flex items-center gap-2">
+                                        <div className="flex-1 flex flex-col gap-1">
+                                            <div className="flex justify-between text-xs font-medium text-gray-600"><span>Nutrition Card Size</span><span>{Math.round(validSelectedImage.layout.card.scale * 100)}%</span></div>
+                                            <input type="range" min="0" max="20" step="0.1" value={validSelectedImage.layout.card.scale} onChange={(e) => handleScaleChange('card', parseFloat(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black" />
+                                        </div>
+                                        <button onClick={() => handleVisibilityToggle('card', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Card"><Trash2 size={16}/></button>
                                       </div>
-                                      <button onClick={() => handleVisibilityToggle('card', false)} className="p-2 bg-gray-100 hover:bg-red-50 text-gray-500 hover:text-red-500 rounded-lg transition-colors mt-4" title="Hide Card"><Trash2 size={16}/></button>
+                                      
+                                      {/* Expanded Card Style Controls */}
+                                      <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
+                                          <button onClick={() => setShowCardStyleSettings(!showCardStyleSettings)} className="w-full flex items-center justify-between p-3 bg-gray-100/50 hover:bg-gray-100 text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                                              <span>Card Style & Typography</span>
+                                              {showCardStyleSettings ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+                                          </button>
+                                          
+                                          {showCardStyleSettings && (
+                                              <div className="p-3 space-y-4 animate-in slide-in-from-top-2 duration-200">
+                                                  {/* Colors */}
+                                                  <div className="grid grid-cols-2 gap-3">
+                                                      <div>
+                                                          <label className="block text-xs text-gray-500 mb-1">Background</label>
+                                                          <div className="flex items-center gap-2">
+                                                              <input type="color" value={validSelectedImage.layout.cardStyle?.bgColor || '#ffffff'} onChange={(e) => handleCardStyleChange('bgColor', e.target.value)} className="w-8 h-8 rounded cursor-pointer border-0 p-0" />
+                                                              <input type="range" min="0" max="1" step="0.05" value={validSelectedImage.layout.cardStyle?.opacity ?? 0.95} onChange={(e) => handleCardStyleChange('opacity', parseFloat(e.target.value))} className="flex-1 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-gray-600" title="Opacity"/>
+                                                          </div>
+                                                      </div>
+                                                      <div>
+                                                          <label className="block text-xs text-gray-500 mb-1">Text Color</label>
+                                                          <div className="flex items-center gap-2">
+                                                              <input type="color" value={validSelectedImage.layout.cardStyle?.textColor || '#1f2937'} onChange={(e) => handleCardStyleChange('textColor', e.target.value)} className="w-8 h-8 rounded cursor-pointer border-0 p-0" />
+                                                              <input type="color" value={validSelectedImage.layout.cardStyle?.secondaryColor || '#6b7280'} onChange={(e) => handleCardStyleChange('secondaryColor', e.target.value)} className="w-8 h-8 rounded cursor-pointer border-0 p-0" title="Secondary Text Color"/>
+                                                          </div>
+                                                      </div>
+                                                  </div>
+                                                  
+                                                  {/* Typography Scales */}
+                                                  <div className="space-y-3 pt-2 border-t border-gray-200">
+                                                      <div className="flex flex-col gap-1">
+                                                        <div className="flex justify-between text-xs font-medium text-gray-600"><span>Title Size</span><span>{Math.round((validSelectedImage.layout.cardStyle?.titleScale ?? 1.0) * 100)}%</span></div>
+                                                        <input type="range" min="0.5" max="2" step="0.1" value={validSelectedImage.layout.cardStyle?.titleScale ?? 1.0} onChange={(e) => handleCardStyleChange('titleScale', parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600" />
+                                                      </div>
+                                                      <div className="flex flex-col gap-1">
+                                                        <div className="flex justify-between text-xs font-medium text-gray-600"><span>Calories Size</span><span>{Math.round((validSelectedImage.layout.cardStyle?.caloriesScale ?? 1.0) * 100)}%</span></div>
+                                                        <input type="range" min="0.5" max="2" step="0.1" value={validSelectedImage.layout.cardStyle?.caloriesScale ?? 1.0} onChange={(e) => handleCardStyleChange('caloriesScale', parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600" />
+                                                      </div>
+                                                      <div className="flex flex-col gap-1">
+                                                        <div className="flex justify-between text-xs font-medium text-gray-600"><span>Macros Size</span><span>{Math.round((validSelectedImage.layout.cardStyle?.macrosScale ?? 1.0) * 100)}%</span></div>
+                                                        <input type="range" min="0.5" max="2" step="0.1" value={validSelectedImage.layout.cardStyle?.macrosScale ?? 1.0} onChange={(e) => handleCardStyleChange('macrosScale', parseFloat(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600" />
+                                                      </div>
+                                                  </div>
+                                                  
+                                                  {/* Toggles */}
+                                                   <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                                                      <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer">
+                                                          <input type="checkbox" checked={validSelectedImage.layout.cardStyle?.showTitle ?? true} onChange={(e) => handleCardStyleChange('showTitle', e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
+                                                          Show Title
+                                                      </label>
+                                                      <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer">
+                                                          <input type="checkbox" checked={validSelectedImage.layout.cardStyle?.showMacros ?? true} onChange={(e) => handleCardStyleChange('showMacros', e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
+                                                          Show Macros
+                                                      </label>
+                                                   </div>
+                                                   
+                                                   {/* Corner Radius */}
+                                                   <div className="pt-1">
+                                                        <div className="flex justify-between text-xs font-medium text-gray-600 mb-1"><span>Roundness</span><span>{validSelectedImage.layout.cardStyle?.cornerRadius ?? 16}px</span></div>
+                                                        <input type="range" min="0" max="50" step="2" value={validSelectedImage.layout.cardStyle?.cornerRadius ?? 16} onChange={(e) => handleCardStyleChange('cornerRadius', parseInt(e.target.value))} className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-gray-500" />
+                                                   </div>
+                                              </div>
+                                          )}
+                                      </div>
                                     </>
                                   ) : (
                                     <div className="flex-1 flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200 border-dashed">

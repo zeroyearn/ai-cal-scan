@@ -1,4 +1,5 @@
 
+
 export interface FoodItem {
   name: string;
   box_2d: number[]; // [ymin, xmin, ymax, xmax] 0-1000 scale
@@ -50,8 +51,22 @@ export interface LabelState extends ElementState {
   style: LabelStyle;
 }
 
+export interface CardStyle {
+  bgColor: string;
+  textColor: string;
+  secondaryColor: string;
+  opacity: number;
+  titleScale: number;
+  caloriesScale: number;
+  macrosScale: number;
+  showTitle: boolean;
+  showMacros: boolean;
+  cornerRadius: number;
+}
+
 export interface ImageLayout {
   card: ElementState;
+  cardStyle?: CardStyle;
   mealType: ElementState;
   labels: LabelState[];
   caption?: ElementState; // For Viral Text
