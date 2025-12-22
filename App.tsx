@@ -129,17 +129,22 @@ function App() {
     });
   };
 
-  const handleCreateCollage = async (files: (File | null)[], transforms: CollageTransform[], padding: number) => {
+  const handleCreateCollage = async (collages: { files: (File | null)[], transforms: CollageTransform[], padding: number }[]) => {
     setIsCreatingCollage(true);
     // Allow UI to update
     await new Promise(r => setTimeout(r, 100));
 
     try {
-      // 1. Create the collage image
-      const collageFile = await createCollage(files, transforms, padding);
+      const newCollageFiles: File[] = [];
 
-      // 2. Add it to our images list (mark as collage)
-      addImages([collageFile], 'collage');
+      // Process chunks sequentially to avoid memory spikes
+      for (const collage of collages) {
+        const collageFile = await createCollage(collage.files, collage.transforms, collage.padding);
+        newCollageFiles.push(collageFile);
+      }
+
+      // 2. Add them to our images list (mark as collage)
+      addImages(newCollageFiles, 'collage');
 
       // 3. Switch back to view it (we stay in collage mode now)
       // setAppMode('scan'); 

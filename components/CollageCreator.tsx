@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, X, Grid, Loader2, Image as ImageIcon, Cloud, Move, Sliders } from 'lucide-react';
+import { Upload, X, Grid, Loader2, Image as ImageIcon, Cloud, Move, Sliders, ArrowLeftRight, Check, GripVertical } from 'lucide-react';
 import { CollageTransform } from '../types';
 
 interface CollageCreatorProps {
-    onCreateCollage: (images: (File | null)[], transforms: CollageTransform[], padding: number) => void;
+    onCreateCollage: (collages: { files: (File | null)[], transforms: CollageTransform[], padding: number }[]) => void;
     onCancel: () => void;
     isProcessing: boolean;
     onPickFromDrive: (callback: (files: File[]) => void) => void;
@@ -13,9 +13,41 @@ interface CollageCreatorProps {
 const DEFAULT_TRANSFORM: CollageTransform = { scale: 1, x: 0, y: 0 };
 
 export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPickFromDrive, isDriveLoading }: CollageCreatorProps) {
-    const [slots, setSlots] = useState<(File | null)[]>([null, null, null, null]);
-    const [transforms, setTransforms] = useState<CollageTransform[]>(Array(4).fill(DEFAULT_TRANSFORM));
+    const [page, setPage] = useState(0);
+    // Each group has up to 4 files. We store an array of arrays.
+    const [groups, setGroups] = useState<(File | null)[][]>([[null, null, null, null]]);
+
+    // Transforms need to be tracked PER GROUP. 
+    // Array of arrays of transforms.
+    const [transformsMap, setTransformsMap] = useState<CollageTransform[][]>([Array(4).fill(DEFAULT_TRANSFORM)]);
+
+    // Reordering State
+    const [isReordering, setIsReordering] = useState(false);
+    const [reorderList, setReorderList] = useState<File[]>([]);
+    const [draggingId, setDraggingId] = useState<number | null>(null);
+
     const [padding, setPadding] = useState(0); // 0 to 50 range
+
+    // Current derived state
+    const slots = groups[page] || [null, null, null, null];
+    const transforms = transformsMap[page] || Array(4).fill(DEFAULT_TRANSFORM);
+
+    const setSlots = (newSlots: (File | null)[]) => {
+        setGroups(prev => {
+            const next = [...prev];
+            next[page] = newSlots;
+            return next;
+        });
+    };
+
+    const setTransforms = (updater: (prev: CollageTransform[]) => CollageTransform[]) => {
+        setTransformsMap(prev => {
+            const next = [...prev];
+            const current = next[page] || Array(4).fill(DEFAULT_TRANSFORM);
+            next[page] = updater(current);
+            return next;
+        });
+    };
 
     // Interaction State
     const [dragging, setDragging] = useState<{ idx: number, startX: number, startY: number, initX: number, initY: number } | null>(null);
@@ -36,7 +68,7 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
         // Reset transform for this slot
         const newTransforms = [...transforms];
         newTransforms[index] = { ...DEFAULT_TRANSFORM };
-        setTransforms(newTransforms);
+        setTransforms(() => newTransforms);
     };
 
     const handleDrop = (index: number, e: React.DragEvent) => {
@@ -47,6 +79,74 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
                 updateSlot(index, file);
             }
         }
+    };
+
+    // --- Reorder Logic ---
+    const handleStartReorder = () => {
+        // Flatten all groups into a single list of files (filtering out nulls? No, keep nulls as placeholders? 
+        // Better to filter out nulls for easier sorting, then fill pages.
+        // Or keep nulls to preserve empty slots? 
+        // User asked to "specify 4 images as a group".
+        // Best UX: Flatten and Filter out nulls. Then filling pages fills them sequentially.
+        const flat = groups.flat().filter((f): f is File => f !== null);
+        setReorderList(flat);
+        setIsReordering(true);
+    };
+
+    const handleSaveReorder = () => {
+        // Re-chunk the list into groups of 4
+        const newGroups: (File | null)[][] = [];
+        const newTransformsMap: CollageTransform[][] = [];
+
+        const files = reorderList;
+        let idx = 0;
+
+        while (idx < files.length) {
+            const chunk = files.slice(idx, idx + 4);
+            // Pad chunk with nulls if needed
+            const pageSlots = Array(4).fill(null);
+            chunk.forEach((f, i) => pageSlots[i] = f);
+            newGroups.push(pageSlots);
+
+            // Reset transforms for re-ordered items (safer than trying to map old transforms)
+            newTransformsMap.push(Array(4).fill(DEFAULT_TRANSFORM).map(() => ({ ...DEFAULT_TRANSFORM })));
+
+            idx += 4;
+        }
+
+        if (newGroups.length === 0) {
+            newGroups.push([null, null, null, null]);
+            newTransformsMap.push(Array(4).fill(DEFAULT_TRANSFORM));
+        }
+
+        setGroups(newGroups);
+        setTransformsMap(newTransformsMap);
+        setPage(0); // Go back to start
+        setIsReordering(false);
+    };
+
+    const onDragStart = (e: React.DragEvent, index: number) => {
+        setDraggingId(index);
+        e.dataTransfer.effectAllowed = "move";
+        // Ghost image logic handled by browser usually
+    };
+
+    const onDragOver = (e: React.DragEvent, index: number) => {
+        e.preventDefault();
+        if (draggingId === null || draggingId === index) return;
+
+        // Swap locally for visual feedback
+        const newList = [...reorderList];
+        const item = newList[draggingId];
+        newList.splice(draggingId, 1);
+        newList.splice(index, 0, item);
+
+        setReorderList(newList);
+        setDraggingId(index);
+    };
+
+    const onDragEnd = () => {
+        setDraggingId(null);
     };
 
     // --- Interaction Handlers ---
@@ -118,6 +218,62 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
 
     return (
         <div className="flex-1 flex flex-col h-full bg-gray-50 overflow-hidden relative">
+
+            {/* Reorder Overlay */}
+            {isReordering && (
+                <div className="absolute inset-0 z-50 bg-white/95 backdrop-blur-sm flex flex-col animate-in fade-in duration-200">
+                    <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white shadow-sm">
+                        <div>
+                            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                                <ArrowLeftRight className="text-blue-600" />
+                                Reorder Images
+                            </h3>
+                            <p className="text-xs text-gray-500">Drag images to change their order & pagination</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setIsReordering(false)}
+                                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleSaveReorder}
+                                className="px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg flex items-center gap-2"
+                            >
+                                <Check size={16} /> Done
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-8">
+                        <div className="flex flex-wrap gap-4 justify-center max-w-4xl mx-auto pb-20">
+                            {reorderList.map((file, i) => (
+                                <div
+                                    key={i}
+                                    draggable
+                                    onDragStart={(e) => onDragStart(e, i)}
+                                    onDragOver={(e) => onDragOver(e, i)}
+                                    onDragEnd={onDragEnd}
+                                    className={`relative w-24 h-24 rounded-lg overflow-hidden border-2 cursor-move transition-all
+                                        ${draggingId === i ? 'opacity-50 border-blue-400 scale-95' : 'border-gray-200 hover:border-blue-400 hover:shadow-md'}
+                                    `}
+                                >
+                                    <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] w-5 h-5 flex items-center justify-center rounded-full pointer-events-none z-10">
+                                        {i + 1}
+                                    </div>
+                                    <img src={URL.createObjectURL(file)} className="w-full h-full object-cover pointer-events-none" />
+
+                                    {/* Page Break indicator */}
+                                    {(i + 1) % 4 === 0 && i !== reorderList.length - 1 && (
+                                        <div className="absolute -right-5 top-1/2 -translate-y-1/2 w-6 h-8 border-r-2 border-dashed border-gray-300 z-0"></div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="absolute inset-0 flex items-center justify-center p-8">
                 <div className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col h-[85vh]">
 
@@ -209,18 +365,42 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
                                                     e.stopPropagation();
                                                     onPickFromDrive((files) => {
                                                         if (files && files.length > 0) {
-                                                            let fileIdx = 0;
-                                                            const newSlots = [...slots];
-                                                            const newTransforms = [...transforms];
-                                                            for (let i = index; i < 4 && fileIdx < files.length; i++) {
-                                                                if (!newSlots[i]) {
-                                                                    newSlots[i] = files[fileIdx];
-                                                                    newTransforms[i] = { ...DEFAULT_TRANSFORM };
-                                                                    fileIdx++;
+                                                            // Split files into chunks of 4
+                                                            const newGroups = [...groups];
+                                                            const newTransformsMap = [...transformsMap];
+
+                                                            let currentFileIdx = 0;
+
+                                                            // Fill current page first
+                                                            let currentPageInfo = [...(newGroups[page] || [null, null, null, null])];
+                                                            let currentTransformInfo = [...(newTransformsMap[page] || Array(4).fill({ ...DEFAULT_TRANSFORM }))];
+
+                                                            for (let i = index; i < 4 && currentFileIdx < files.length; i++) {
+                                                                if (!currentPageInfo[i]) {
+                                                                    currentPageInfo[i] = files[currentFileIdx];
+                                                                    currentTransformInfo[i] = { ...DEFAULT_TRANSFORM };
+                                                                    currentFileIdx++;
                                                                 }
                                                             }
-                                                            setSlots(newSlots);
-                                                            setTransforms(newTransforms);
+
+                                                            newGroups[page] = currentPageInfo;
+                                                            newTransformsMap[page] = currentTransformInfo;
+
+                                                            // If we have more files, create new pages
+                                                            while (currentFileIdx < files.length) {
+                                                                const chunk = files.slice(currentFileIdx, currentFileIdx + 4);
+                                                                const pageSlots = Array(4).fill(null);
+                                                                chunk.forEach((f, i) => pageSlots[i] = f);
+
+                                                                const pageTransforms = Array(4).fill(DEFAULT_TRANSFORM).map(() => ({ ...DEFAULT_TRANSFORM }));
+
+                                                                newGroups.push(pageSlots);
+                                                                newTransformsMap.push(pageTransforms);
+                                                                currentFileIdx += 4;
+                                                            }
+
+                                                            setGroups(newGroups);
+                                                            setTransformsMap(newTransformsMap);
                                                         }
                                                     });
                                                 }}
@@ -269,6 +449,38 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
                             </span>
 
                             <div className="flex gap-3">
+                                {groups.length > 1 && (
+                                    <div className="flex items-center gap-1 mr-2">
+                                        <button
+                                            onClick={() => setPage(p => Math.max(0, p - 1))}
+                                            disabled={page === 0}
+                                            className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"
+                                        >
+                                            Previous
+                                        </button>
+                                        <span className="text-sm font-medium text-gray-600">
+                                            Page {page + 1} / {groups.length}
+                                        </span>
+                                        <button
+                                            onClick={() => setPage(p => Math.min(groups.length - 1, p + 1))}
+                                            disabled={page === groups.length - 1}
+                                            className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"
+                                        >
+                                            Next
+                                        </button>
+                                    </div>
+                                )}
+
+                                {groups.length > 0 && groups.some(g => g.some(Boolean)) && (
+                                    <button
+                                        onClick={handleStartReorder}
+                                        className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg mr-2 transition-colors"
+                                        title="Reorder all images"
+                                    >
+                                        <ArrowLeftRight size={20} />
+                                    </button>
+                                )}
+
                                 <button
                                     onClick={onCancel}
                                     className="px-5 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-all"
@@ -277,30 +489,42 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
                                 </button>
                                 <button
                                     onClick={() => {
-                                        // Normalize transforms
-                                        const normalizedTransforms = transforms.map((t, i) => {
-                                            const el = containerRefs.current[i];
-                                            if (el) {
-                                                const { width, height } = el.getBoundingClientRect();
-                                                return {
-                                                    scale: t.scale,
-                                                    x: t.x / width,
-                                                    y: t.y / height
-                                                };
+                                        // Normalize transforms for ALL groups
+                                        const batchConfigs = groups.map((groupSlots, groupIdx) => {
+                                            const groupTransforms = transformsMap[groupIdx];
+
+                                            const normalizedTransforms = groupTransforms.map((t, i) => {
+                                                const el = containerRefs.current[i];
+                                                if (el) {
+                                                    const { width, height } = el.getBoundingClientRect();
+                                                    return {
+                                                        scale: t.scale,
+                                                        x: t.x / width,
+                                                        y: t.y / height
+                                                    };
+                                                }
+                                                return t;
+                                            });
+
+                                            const slot0 = containerRefs.current[0];
+                                            let normalizedPadding = 0;
+                                            if (slot0) {
+                                                const { width } = slot0.getBoundingClientRect();
+                                                normalizedPadding = padding / width;
                                             }
-                                            return t;
+
+                                            return {
+                                                files: groupSlots,
+                                                transforms: normalizedTransforms,
+                                                padding: normalizedPadding
+                                            };
                                         });
 
-                                        const slot0 = containerRefs.current[0];
-                                        let normalizedPadding = 0;
-                                        if (slot0) {
-                                            const { width } = slot0.getBoundingClientRect();
-                                            // Padding is applied to gap+padding.
-                                            // Ratio = padding / width.
-                                            normalizedPadding = padding / width;
-                                        }
+                                        const validBatch = batchConfigs.filter(b => b.files.some(f => f !== null));
 
-                                        onCreateCollage(slots, normalizedTransforms, normalizedPadding);
+                                        if (validBatch.length > 0) {
+                                            onCreateCollage(validBatch);
+                                        }
                                     }}
                                     disabled={!canCreate || isProcessing}
                                     className={`px-6 py-2 text-sm font-bold text-white rounded-lg shadow-md flex items-center gap-2 transition-all transform active:scale-95
@@ -309,7 +533,7 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
                                             : 'bg-indigo-600 hover:bg-indigo-700'}`}
                                 >
                                     {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <ImageIcon size={16} />}
-                                    {isProcessing ? 'Creating...' : 'Create Collage'}
+                                    {isProcessing ? `Create ${groups.length > 1 ? 'All' : 'Collage'}` : `Create ${groups.length > 1 ? 'All (' + groups.length + ')' : 'Collage'}`}
                                 </button>
                             </div>
                         </div>
