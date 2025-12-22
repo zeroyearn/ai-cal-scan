@@ -50,12 +50,16 @@ export interface LayoutConfig {
   defaultTitleScale: number;
   defaultCardScale: number;
   defaultLabelScale: number;
+  defaultCardX?: number; // 0-1
+  defaultCardY?: number; // 0-1
+  defaultTitleY?: number;
 }
 
 export type ProcessStatus = 'idle' | 'analyzing' | 'rendering' | 'complete' | 'error' | 'not-food';
 
 export interface ProcessedImage {
   id: string;
+  sourceMode: 'scan' | 'collage';
   file: File;
   previewUrl: string;
   status: ProcessStatus;
@@ -64,6 +68,12 @@ export interface ProcessedImage {
   resultUrl?: string; // The flattened result (generated from layout)
   error?: string;
   driveFileId?: string; // ID of the original file if imported from Google Drive
+}
+
+export interface CollageTransform {
+  scale: number;
+  x: number;
+  y: number;
 }
 
 export interface HitRegion {
