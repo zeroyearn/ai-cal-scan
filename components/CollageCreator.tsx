@@ -38,6 +38,7 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
     // Data State (Single Page)
     const [slots, setSlots] = useState<(File | null)[]>([null, null, null, null]);
     const [transforms, setTransforms] = useState<CollageTransform[]>([DEFAULT_TRANSFORM, DEFAULT_TRANSFORM, DEFAULT_TRANSFORM, DEFAULT_TRANSFORM]);
+    const [imgAspects, setImgAspects] = useState<number[]>([1, 1, 1, 1]);
 
     // UI State
     const [isGenerating, setIsGenerating] = useState(false);
@@ -104,20 +105,7 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
         const handleMouseMove = (e: MouseEvent) => {
             if (!dragging) return;
             const { idx, startX, startY, initX, initY } = dragging;
-            // Normalize movement based on container size? 
-            // Currently transforms x/y are normalized to "GRID_SIZE" inside createCollage?
-            // Wait, createCollage uses t.x * GRID_SIZE. 
-            // Here we want visual feedback to match.
-            // If we move 100px on screen, how much is that in T.x?
-            // It depends on the rendered size vs actual size.
-            // Let's rely on a rough sensitivity factor or correct normalization.
-            // Simplified: Just use raw movements and rely on "visual" feel.
-
-            // To be precise: If preview is 500px, 1px move is 1/250 of a grid cell (if 2x2).
-            // T.x = 1 means shift by full GRID_SIZE.
-            // So dx should be divided by (RenderedCellWidth).
-            // Let's approximate RenderedCellWidth.
-            // We can grab it from Ref? or just guess ~200px.
+            // Sensitivity Factor
             const sensitivity = 0.003;
 
             const dx = (e.clientX - startX) * sensitivity;
@@ -336,100 +324,115 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
                         height: 'min(90%, 90vw)',
                         maxHeight: '800px',
                         maxWidth: '100%',
-                        padding: `${padding}px`, // Visual padding simulation? 
-                        // Wait, padding in createCollage is internal to grid cells if we follow the code. 
-                        // But user UI shows "Padding" slider. Usually creates gaps.
-                        // My createCollage uses padding as INSET. 
-                        // To simulate visual fidelity, we should replicate the grid logic here.
+                        padding: `${padding}px`,
                     }}
                 >
                     {/* The Grid */}
                     <div className="w-full h-full grid grid-cols-2 grid-rows-2">
-                        {slots.map((file, index) => (
-                            <div
-                                key={index}
-                                className="relative overflow-hidden group border border-dashed border-gray-200/50 hover:border-purple-300/50 transition-colors"
-                                onDragOver={(e) => e.preventDefault()}
-                                onDrop={(e) => handleDrop(index, e)}
-                                style={{
-                                    padding: `${(padding / width) * 100}%` // Approximate padding simulation for visual preview relative to container width?
-                                    // Actually, createCollage uses pixel padding. 
-                                    // If preview container is scaled down, padding should scale down too.
-                                    // Best way: Use CSS padding on the CELL div.
-                                    // But I need to map "padding pixels" to "CSS percentage" or "CSS px scaled".
-                                    // Since container is sized by CSS, we can't easily use px directly unless we know container px.
-                                    // WORKAROUND: Use percentage based on Width state.
-                                    // padding_pct = padding / (width/2) * 100% ? No.
-                                    // Padding adds spacing around image inside cell.
-                                }}
-                            >
-                                {/* Inner Content Box (Simulates fit area) */}
+                        {slots.map((file, index) => {
+                            const cellAspect = width / height; // Assuming 2x2, cell AR matches overall AR? Yes, (W/2)/(H/2) = W/H.
+                            const imgAr = imgAspects[index] || 1;
+                            const isWide = imgAr > cellAspect;
+
+                            return (
                                 <div
-                                    className="w-full h-full relative overflow-hidden bg-gray-50/50"
+                                    key={index}
+                                    className="relative overflow-hidden group border border-dashed border-gray-200/50 hover:border-purple-300/50 transition-colors"
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={(e) => handleDrop(index, e)}
                                     style={{
-                                        margin: `${(padding / width) * 200}%` // Hacky approximation: padding is px. width is px. 
-                                        // If width=2000, padding=40. 40/2000 = 2%. 
-                                        // Grid cell is 1000px. Padding 40px is 4% of cell.
-                                        // So margin = (padding / (width/2)) * 100 %
+                                        padding: `${(padding / width) * 100}%`
                                     }}
                                 >
-                                    {file ? (
-                                        <div
-                                            className="w-full h-full relative cursor-move"
-                                            onMouseDown={(e) => handleMouseDown(index, e)}
-                                            onWheel={(e) => handleWheel(index, e)}
-                                        >
-                                            <img
-                                                src={URL.createObjectURL(file)}
-                                                className="w-full h-full object-contain pointer-events-none select-none"
-                                                style={{
-                                                    transform: `translate(${transforms[index].x * 100}%, ${transforms[index].y * 100}%) scale(${transforms[index].scale})`,
-                                                }}
-                                            />
-                                            <button
-                                                onClick={() => updateSlot(index, null)}
-                                                className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                                    {/* Inner Content Box (Simulates fit area) */}
+                                    <div
+                                        className="w-full h-full relative overflow-hidden bg-gray-50/50"
+                                        style={{
+                                            margin: `${(padding / width) * 100}%`
+                                        }}
+                                    >
+                                        {file ? (
+                                            <>
+                                                {/* Mover wrapper for Panning */}
+                                                <div
+                                                    className="absolute inset-0"
+                                                    style={{
+                                                        transform: `translate(${transforms[index].x * 100}%, ${transforms[index].y * 100}%)`
+                                                    }}
+                                                >
+                                                    {/* Image: Scaled & Positioned to Cover */}
+                                                    <img
+                                                        src={URL.createObjectURL(file)}
+                                                        onLoad={(e) => {
+                                                            const natW = e.currentTarget.naturalWidth;
+                                                            const natH = e.currentTarget.naturalHeight;
+                                                            if (natW && natH) {
+                                                                setImgAspects(prev => {
+                                                                    const next = [...prev];
+                                                                    next[index] = natW / natH;
+                                                                    return next;
+                                                                });
+                                                            }
+                                                        }}
+                                                        className="absolute top-1/2 left-1/2 max-w-none select-none cursor-move"
+                                                        style={{
+                                                            width: isWide ? 'auto' : '100%',
+                                                            height: isWide ? '100%' : 'auto',
+                                                            transform: `translate(-50%, -50%) scale(${transforms[index].scale})`,
+                                                        }}
+                                                        onMouseDown={(e) => handleMouseDown(index, e)}
+                                                        onWheel={(e) => handleWheel(index, e)}
+                                                    />
+                                                </div>
+                                                <button
+                                                    onClick={() => updateSlot(index, null)}
+                                                    className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-20"
+                                                >
+                                                    <X size={12} />
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <div
+                                                className="w-full h-full flex flex-col items-center justify-center cursor-pointer hover:bg-purple-50 transition-colors"
+                                                onClick={() => fileInputRefs.current[index]?.click()}
                                             >
-                                                <X size={12} />
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <div
-                                            className="w-full h-full flex flex-col items-center justify-center cursor-pointer hover:bg-purple-50 transition-colors"
-                                            onClick={() => fileInputRefs.current[index]?.click()}
-                                        >
-                                            <Upload size={24} className="text-gray-300" />
-                                            <span className="text-[10px] text-gray-400 font-medium mt-2">Add Image</span>
+                                                <Upload size={24} className="text-gray-300" />
+                                                <span className="text-[10px] text-gray-400 font-medium mt-2">Add Image</span>
 
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    onPickFromDrive((files) => {
-                                                        const newSlots = [...slots];
-                                                        let fileIdx = 0;
-                                                        // Fill from this index onwards
-                                                        for (let i = index; i < 4 && fileIdx < files.length; i++) {
-                                                            if (!newSlots[i]) newSlots[i] = files[fileIdx++];
-                                                        }
-                                                        setSlots(newSlots);
-                                                    });
-                                                }}
-                                                className="absolute bottom-2 right-2 p-1.5 bg-white border border-gray-200 rounded-md text-gray-400 hover:text-blue-600 shadow-sm z-10"
-                                            >
-                                                <Cloud size={14} />
-                                            </button>
-                                        </div>
-                                    )}
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onPickFromDrive((files) => {
+                                                            const newSlots = [...slots];
+                                                            const newTransforms = [...transforms];
+                                                            let fileIdx = 0;
+                                                            for (let i = index; i < 4 && fileIdx < files.length; i++) {
+                                                                if (!newSlots[i]) {
+                                                                    newSlots[i] = files[fileIdx++];
+                                                                    newTransforms[i] = { ...DEFAULT_TRANSFORM };
+                                                                }
+                                                            }
+                                                            setSlots(newSlots);
+                                                            setTransforms(newTransforms);
+                                                        });
+                                                    }}
+                                                    className="absolute bottom-2 right-2 p-1.5 bg-white border border-gray-200 rounded-md text-gray-400 hover:text-blue-600 shadow-sm z-10"
+                                                >
+                                                    <Cloud size={14} />
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <input
+                                        type="file"
+                                        className="hidden"
+                                        accept="image/*"
+                                        ref={el => fileInputRefs.current[index] = el}
+                                        onChange={(e) => handleFileChange(index, e)}
+                                    />
                                 </div>
-                                <input
-                                    type="file"
-                                    className="hidden"
-                                    accept="image/*"
-                                    ref={el => fileInputRefs.current[index] = el}
-                                    onChange={(e) => handleFileChange(index, e)}
-                                />
-                            </div>
-                        ))}
+                            )
+                        })}
                     </div>
                 </div>
             </div>

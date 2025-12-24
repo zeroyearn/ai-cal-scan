@@ -685,10 +685,10 @@ export const createCollage = async (
 
       if (contentW <= 0 || contentH <= 0) continue;
 
-      // Fit Image (Contain)
+      // Fill Image (Cover)
       const scaleW = contentW / img.width;
       const scaleH = contentH / img.height;
-      const baseScale = Math.min(scaleW, scaleH);
+      const baseScale = Math.max(scaleW, scaleH);
 
       const drawW = img.width * baseScale;
       const drawH = img.height * baseScale;
