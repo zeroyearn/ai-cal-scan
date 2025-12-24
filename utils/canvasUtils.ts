@@ -3,8 +3,6 @@ import { FoodAnalysis, ImageLayout, HitRegion, ElementState, LabelState, LayoutC
 // --- Constants for Scale Calibration ---
 // These factors calibrate the "User Scale" to the "Canvas Scale".
 // Unified across preview and export.
-// These factors calibrate the "User Scale" to the "Canvas Scale".
-// Unified across preview and export.
 const TITLE_SCALE_MODIFIER = 0.15;
 const CARD_SCALE_MODIFIER = 0.25;
 
@@ -18,7 +16,9 @@ export const drawScene = (
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement | null, // Pass null if you only want to draw overlays (transparent bg)
   analysis: FoodAnalysis,
-  layout: ImageLayout
+  layout: ImageLayout,
+  mode: 'scan' | 'collage' | 'nutrition' = 'scan',
+  logoImage: HTMLImageElement | null = null
 ): HitRegion[] => {
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
@@ -30,16 +30,19 @@ export const drawScene = (
   }
 
   // Base scale relative to a 1200px wide reference image
-  // This ensures elements look the same relative size regardless of resolution
   const refScale = width / 1200;
+
+  if (mode === 'nutrition') {
+    return drawNutritionModeScene(ctx, analysis, layout, refScale, width, height, logoImage);
+  }
+
+  // --- STANDARD SCAN/COLLAGE MODE ---
 
   // 2. Draw Meal Type
   if (layout.mealType.visible) {
     const x = layout.mealType.x * width;
     // Apply Modifier
     const s = layout.mealType.scale * refScale * TITLE_SCALE_MODIFIER;
-    // Text offset adjustment (centering) is handled in draw function, 
-    // but the layout.y is the top-center anchor.
     const y = layout.mealType.y * height;
 
     const bounds = drawMealTypeInternal(ctx, layout.mealType.text || analysis.mealType, x, y, s);
@@ -120,12 +123,13 @@ export const drawScene = (
 export const renderFinalImage = async (
   base64Image: string,
   analysis: FoodAnalysis,
-  layout: ImageLayout
+  layout: ImageLayout,
+  mode: 'scan' | 'collage' | 'nutrition' = 'scan'
 ): Promise<string> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.src = base64Image;
-    img.onload = () => {
+    img.onload = async () => {
       // Enforce minimum export width for crisp text
       const TARGET_WIDTH = 2048;
 
@@ -140,6 +144,20 @@ export const renderFinalImage = async (
         dHeight = Math.round(dHeight * scale);
       }
 
+      // Preload Logo if exists
+      let logoImage: HTMLImageElement | null = null;
+      if (layout.logo?.url) {
+        try {
+          logoImage = await new Promise((res, rej) => {
+            const lImg = new Image();
+            lImg.crossOrigin = "anonymous";
+            lImg.src = layout.logo!.url;
+            lImg.onload = () => res(lImg);
+            lImg.onerror = () => res(null); // Fail gracefully
+          });
+        } catch (e) { console.error("Failed to load logo", e); }
+      }
+
       const canvas = document.createElement("canvas");
       canvas.width = dWidth;
       canvas.height = dHeight;
@@ -152,7 +170,7 @@ export const renderFinalImage = async (
 
       // Use the unified drawing function
       // drawScene draws the image to full canvas size automatically
-      drawScene(ctx, img, analysis, layout);
+      drawScene(ctx, img, analysis, layout, mode, logoImage);
 
       resolve(canvas.toDataURL("image/jpeg", 0.92));
     };
@@ -716,3 +734,272 @@ export const createCollage = async (files: (File | null)[], transforms: CollageT
 
   return Promise.race([blobPromise, timeoutPromise]);
 };
+// --- Nutrition Mode Specific Drawing ---
+
+const drawNutritionModeScene = (
+  ctx: CanvasRenderingContext2D,
+  analysis: FoodAnalysis,
+  layout: ImageLayout,
+  refScale: number,
+  width: number,
+  height: number,
+  logoImage: HTMLImageElement | null
+): HitRegion[] => {
+  const hitRegions: HitRegion[] = [];
+
+  // 1. Draw Labels (Bubble Style with Calories)
+  layout.labels.forEach((label, idx) => {
+    if (!label.visible) return;
+
+    // Use analysis item data if available for calories
+    const itemData = analysis.items[idx];
+    const calories = itemData?.calories || 0;
+    const foodName = label.text || itemData?.name || "Unknown";
+
+    // Check if we already have the combined text, otherwise construct it
+    // The label.text is usually editable, so we trust it if it differs from item name, 
+    // BUT for this mode, we want "Kcal \n Name". 
+    // If the user edited the text, we might lose the calorie info if we just use label.text.
+    // Let's assume label.text IS the food name part.
+
+    // We construct the display text for the bubble
+    const pillX = label.x * width;
+    const pillY = label.y * height;
+    const anchorX = label.anchorX * width;
+    const anchorY = label.anchorY * height;
+    const s = label.scale * refScale;
+
+    // Draw Anchor Dot
+    ctx.beginPath();
+    ctx.arc(anchorX, anchorY, 6 * s, 0, Math.PI * 2);
+    ctx.fillStyle = "white";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.3)";
+    ctx.lineWidth = 2 * s;
+    ctx.stroke();
+
+    // Draw Line (Triangle pointer style or simple line)
+    // Reference image uses a speech bubble tail. 
+    // For simplicity, we stick to line, or try to draw a path from bubble to anchor.
+    // Let's use written line for now.
+    ctx.beginPath();
+    ctx.moveTo(anchorX, anchorY);
+    ctx.lineTo(pillX, pillY);
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 3 * s;
+    ctx.stroke();
+
+    // Draw Bubble
+    const bounds = drawNutritionBubble(ctx, calories, foodName, pillX, pillY, s);
+
+    hitRegions.push({
+      id: label.id,
+      type: 'label',
+      ...bounds
+    });
+  });
+
+  // 2. Draw Bottom Bar (Fixed Position)
+  // Use custom background color if set on the 'card' element
+  const bgColor = layout.card.backgroundColor || "black";
+  const txtColor = layout.card.color || "white"; // Main text color
+  const barBounds = drawNutritionBottomBar(ctx, analysis, width, height, refScale, bgColor, txtColor);
+  hitRegions.push({
+    id: 'card',
+    type: 'card', // Treat as card for interactions if needed
+    ...barBounds
+  });
+
+  // 3. Draw Logo (if exists)
+  if (layout.logo && layout.logo.visible && logoImage) {
+    const lx = layout.logo.x * width;
+    const ly = layout.logo.y * height;
+    const ls = layout.logo.scale * refScale;
+
+    // Default logo size baseline (e.g., 100px wide)
+    const baseW = 100;
+    const logoW = baseW * ls;
+    const logoH = logoW * (logoImage.height / logoImage.width);
+
+    // Draw centered at x,y? Or top-left? ElementState implies center usually for text, but images usually center.
+    // Let's use centered for consistency with interactivity.
+    const lLeft = lx - logoW / 2;
+    const lTop = ly - logoH / 2;
+
+    ctx.drawImage(logoImage, lLeft, lTop, logoW, logoH);
+
+    hitRegions.push({
+      id: 'logo',
+      type: 'logo',
+      x: lLeft,
+      y: lTop,
+      w: logoW,
+      h: logoH
+    });
+  }
+
+  return hitRegions;
+};
+
+function drawNutritionBubble(ctx: CanvasRenderingContext2D, calories: number, name: string, x: number, y: number, scale: number) {
+  // Config
+  const padding = 16 * scale;
+  const calFontSize = 32 * scale;
+  const nameFontSize = 24 * scale;
+
+  ctx.font = `bold ${calFontSize}px Inter, sans-serif`;
+  const calText = `${calories}`;
+  const calUnit = "kcal";
+  const calMeasure = ctx.measureText(calText + " " + calUnit);
+
+  ctx.font = `500 ${nameFontSize}px Inter, sans-serif`;
+  const nameMeasure = ctx.measureText(name);
+
+  // Width is max of cal line or name line + padding
+  const contentW = Math.max(calMeasure.width, nameMeasure.width);
+  const w = contentW + (padding * 3); // Extra padding
+  const h = (calFontSize + nameFontSize) * 1.4 + padding;
+
+  const left = x - w / 2;
+  const top = y - h / 2;
+
+  // Draw Bubble Background
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.2)";
+  ctx.shadowBlur = 10 * scale;
+  ctx.shadowOffsetY = 4 * scale;
+
+  ctx.beginPath();
+  ctx.roundRect(left, top, w, h, 16 * scale);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+  ctx.fill();
+
+  // Border (Green/Orange hint?)
+  // Reference has colored borders often. Let's stick to clean white with gray stroke.
+  ctx.strokeStyle = "#e5e7eb";
+  ctx.lineWidth = 1 * scale;
+  ctx.stroke();
+  ctx.restore();
+
+  // Draw Text
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+
+  // Calorie Line (Green Color for number)
+  const line1Y = top + padding + calFontSize * 0.8;
+  ctx.font = `bold ${calFontSize}px Inter, sans-serif`;
+  ctx.fillStyle = "#16a34a"; // Green-600
+  ctx.fillText(calText, x - (ctx.measureText(calUnit).width / 2), line1Y);
+
+  const unitX = x + (ctx.measureText(calText).width / 2) + 4 * scale;
+  ctx.fillStyle = "#6b7280"; // Gray-500
+  ctx.font = `normal ${calFontSize * 0.6}px Inter, sans-serif`;
+  ctx.fillText(calUnit, unitX, line1Y);
+
+  // Name Line
+  const line2Y = line1Y + nameFontSize * 1.2;
+  ctx.font = `500 ${nameFontSize}px Inter, sans-serif`;
+  ctx.fillStyle = "#374151"; // Gray-700
+  ctx.fillText(name, x, line2Y);
+
+  // Add small edit icon circle? (Optional)
+
+  return { x: left, y: top, w, h };
+}
+
+function drawNutritionBottomBar(ctx: CanvasRenderingContext2D, analysis: FoodAnalysis, canvasW: number, canvasH: number, scale: number, bgColor: string = "black", txtColor: string = "white") {
+  // Fixed height bar
+  const barH = 180 * scale;
+  const y = canvasH - barH;
+
+  ctx.save();
+
+  // Background
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, y, canvasW, barH);
+
+  // 1. Total Calories (Left Section)
+  // "总热量: 760千卡, 放心吃吧~"
+  const totalCal = analysis.nutrition.calories;
+  const msg = analysis.nutrition.calories > 800 ? "Watch out!" : "Enjoy!";
+
+  const paddingX = 40 * scale;
+  const line1Y = y + 50 * scale;
+
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+
+  // Fire Icon/Emoji
+  ctx.font = `${32 * scale}px Inter, sans-serif`;
+  ctx.fillText("🔥", paddingX, line1Y);
+
+  // Text
+  ctx.font = `bold ${32 * scale}px Inter, sans-serif`;
+  ctx.fillStyle = txtColor;
+  const labelText = `Total Cals: `;
+
+  const iconW = 40 * scale;
+  ctx.fillText(labelText, paddingX + iconW, line1Y);
+
+  const labelW = ctx.measureText(labelText).width;
+  ctx.fillStyle = "#4ade80"; // Green-400
+  const calText = `${totalCal} kcal`;
+  ctx.fillText(calText, paddingX + iconW + labelW, line1Y);
+
+  const calW = ctx.measureText(calText).width;
+  ctx.fillStyle = "#9ca3af"; // Gray-400
+  ctx.font = `normal ${28 * scale}px Inter, sans-serif`;
+  ctx.fillText(`, ${msg}`, paddingX + iconW + labelW + calW, line1Y);
+
+
+  // 2. Nutrition / Vitamin Separator Line
+  const lineY = y + 90 * scale;
+  ctx.beginPath();
+  // Multi-color line: Green | Yellow | Purple
+  const segmentW = (canvasW - paddingX * 2) / 3;
+  const hLine = 6 * scale;
+
+  // Carbs (Green)
+  ctx.fillStyle = "#4ade80";
+  ctx.roundRect(paddingX, lineY, segmentW - 4 * scale, hLine, 4 * scale);
+  ctx.fill();
+
+  // Protein (Yellow)
+  ctx.fillStyle = "#facc15";
+  ctx.roundRect(paddingX + segmentW, lineY, segmentW - 4 * scale, hLine, 4 * scale);
+  ctx.fill();
+
+  // Fat (Purple/Blue)
+  ctx.fillStyle = "#8b5cf6";
+  ctx.roundRect(paddingX + segmentW * 2, lineY, segmentW - 4 * scale, hLine, 4 * scale);
+  ctx.fill();
+
+
+  // 3. Macros Labels (Bottom Row)
+  const row2Y = y + 135 * scale;
+
+  const drawMacroItem = (label: string, value: string, color: string, xPos: number) => {
+    ctx.beginPath();
+    ctx.arc(xPos, row2Y, 6 * scale, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    ctx.font = `bold ${26 * scale}px Inter, sans-serif`;
+    ctx.fillStyle = "#d1d5db"; // Gray-300
+    ctx.fillText(`${label} ${value}`, xPos + 16 * scale, row2Y);
+  };
+
+  drawMacroItem("Carbs", analysis.nutrition.carbs || "0g", "#4ade80", paddingX);
+  drawMacroItem("Protein", analysis.nutrition.protein || "0g", "#facc15", paddingX + segmentW);
+  drawMacroItem("Fat", analysis.nutrition.fat || "0g", "#8b5cf6", paddingX + segmentW * 2);
+
+
+  // 4. Vitamins? (If space permits or user wants it)
+  // The reference image shows macros at the very bottom.
+  // If we have vitamins, maybe we can put them above the total calories or to the right?
+  // For now, adhere to the reference image which focuses on Macros + Total Cal.
+
+  ctx.restore();
+
+  return { x: 0, y, w: canvasW, h: barH };
+}

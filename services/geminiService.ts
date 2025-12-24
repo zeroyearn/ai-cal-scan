@@ -15,13 +15,14 @@ const analysisSchema = {
         type: Type.OBJECT,
         properties: {
           name: { type: Type.STRING, description: "Name of the specific ingredient/item." },
+          calories: { type: Type.NUMBER, description: "Estimated calories for this specific item (e.g. 70)." },
           box_2d: {
             type: Type.ARRAY,
             items: { type: Type.NUMBER },
             description: "Bounding box [ymin, xmin, ymax, xmax] using 0-1000 scale.",
           },
         },
-        required: ["name", "box_2d"],
+        required: ["name", "box_2d", "calories"],
       },
     },
     nutrition: {
@@ -31,6 +32,7 @@ const analysisSchema = {
         carbs: { type: Type.STRING, description: "Estimated carbs (e.g., '15g')." },
         protein: { type: Type.STRING, description: "Estimated protein (e.g., '42g')." },
         fat: { type: Type.STRING, description: "Estimated fat (e.g., '33g')." },
+        vitamins: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of key vitamins/minerals present (e.g. ['Vit C', 'Iron'])." }
       },
       required: ["calories", "carbs", "protein", "fat"],
     },
@@ -43,9 +45,9 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Analyzes a food image using the Gemini API.
 export async function analyzeFoodImage(
-  base64Image: string, 
-  mimeType: string, 
-  apiKey?: string, 
+  base64Image: string,
+  mimeType: string,
+  apiKey?: string,
   baseUrl?: string
 ): Promise<FoodAnalysis> {
   const maxRetries = 3;
@@ -58,7 +60,7 @@ export async function analyzeFoodImage(
   }
 
   const clientConfig: any = { apiKey: effectiveKey };
-  
+
   // Handle custom Base URL for aggregate APIs
   if (baseUrl && baseUrl.trim().length > 0) {
     let url = baseUrl.trim();
@@ -79,7 +81,7 @@ export async function analyzeFoodImage(
     try {
       // Use gemini-3-flash-preview as the default model.
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-2.0-flash-exp",
         contents: {
           parts: [
             {
@@ -92,8 +94,8 @@ export async function analyzeFoodImage(
               text: `Analyze this image for a bulk food processing tool.
               1. **Verification**: Determine if the *main subject* is real food. If it is a menu, a recipe book, a human face, an empty plate, or just a wrapper, set 'isFood' to false.
               2. **Text Detection**: Check if the image *already* has text overlays, watermarks, subtitles, or nutrition facts added to it. If yes, set 'hasExistingText' to true.
-              3. **Analysis**: Identify specific ingredients (e.g. 'Steak', 'Eggs', 'Rice') and provide 2D bounding boxes (0-1000 scale).
-              4. **Nutrition**: Estimate nutrition facts for the visible portion.`,
+              3. **Analysis**: Identify specific ingredients (e.g. 'Steak', 'Eggs', 'Rice') and provide 2D bounding boxes (0-1000 scale). Estimate CALORIES for EACH detected item.
+              4. **Nutrition**: Estimate total nutrition facts (Macros + Calories) and list major Vitamins/Minerals if apparent.`,
             },
           ],
         },
@@ -113,12 +115,12 @@ export async function analyzeFoodImage(
 
     } catch (error: any) {
       attempt++;
-      
-      const isOverloaded = 
-        error?.status === 503 || 
-        error?.status === 429 || 
-        error?.message?.includes('503') || 
-        error?.message?.includes('429') || 
+
+      const isOverloaded =
+        error?.status === 503 ||
+        error?.status === 429 ||
+        error?.message?.includes('503') ||
+        error?.message?.includes('429') ||
         error?.message?.toLowerCase().includes('overloaded') ||
         error?.message?.toLowerCase().includes('unavailable') ||
         error?.message?.toLowerCase().includes('quota');
@@ -134,6 +136,6 @@ export async function analyzeFoodImage(
       throw error;
     }
   }
-  
+
   throw new Error("Failed to analyze image after multiple retries due to server overload.");
 }

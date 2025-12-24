@@ -1,14 +1,14 @@
 
 import React from 'react';
-import { Utensils, Loader2, Camera, Grid } from 'lucide-react';
+import { Utensils, Loader2, Camera, Grid, Zap } from 'lucide-react';
 import { ProcessedImage } from '../types';
 
 interface HeaderProps {
     images: ProcessedImage[];
     isProcessing: boolean;
     onProcess: () => void;
-    appMode: 'scan' | 'collage';
-    setAppMode: (mode: 'scan' | 'collage') => void;
+    appMode: 'scan' | 'collage' | 'nutrition';
+    setAppMode: (mode: 'scan' | 'collage' | 'nutrition') => void;
     onNewCollage: () => void;
 }
 
@@ -36,6 +36,12 @@ export function Header({ images, isProcessing, onProcess, appMode, setAppMode, o
                         className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${appMode === 'collage' ? 'bg-white shadow-sm text-black' : 'text-gray-500 hover:text-gray-700'}`}
                     >
                         <Grid size={14} /> Collage
+                    </button>
+                    <button
+                        onClick={() => setAppMode('nutrition')}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 ${appMode === 'nutrition' ? 'bg-white shadow-sm text-black' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                        <Zap size={14} /> Nutrition
                     </button>
                 </div>
             </div>

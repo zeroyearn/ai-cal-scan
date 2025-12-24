@@ -19,6 +19,7 @@ interface SidebarProps {
     selectedImageId: string | null;
     onSelectImage: (id: string) => void;
     onRemoveImage: (e: React.MouseEvent, id: string) => void;
+    onBatchSaveToDrive: () => void;
 }
 
 export function Sidebar({
@@ -35,7 +36,8 @@ export function Sidebar({
     onToggleSelection,
     selectedImageId,
     onSelectImage,
-    onRemoveImage
+    onRemoveImage,
+    onBatchSaveToDrive
 }: SidebarProps) {
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -67,6 +69,20 @@ export function Sidebar({
             <div className="flex flex-col px-6 py-4 border-b border-gray-100 bg-gray-50/50 gap-3">
                 <div className="flex justify-between items-center"><span className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Queue ({images.length})</span><button onClick={onToggleSelectAll} className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors" disabled={images.length === 0}>{batchSelection.size === images.length && images.length > 0 ? 'Deselect All' : 'Select All'}</button></div>
 
+                {batchSelection.size > 0 && (
+                    <div className="flex items-center justify-between bg-blue-50 border border-blue-100 p-2 rounded-lg transition-all animate-in fade-in slide-in-from-top-1">
+                        <span className="text-xs font-medium text-blue-700 ml-1">{batchSelection.size} selected</span>
+                        <button
+                            onClick={onBatchSaveToDrive}
+                            disabled={isDriveLoading}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isDriveLoading ? <Loader2 className="animate-spin" size={12} /> : <Cloud size={12} />}
+                            Save to Drive
+                        </button>
+                    </div>
+                )}
+
                 <div className="flex items-center justify-between bg-white border border-gray-200 p-2 rounded-lg cursor-pointer hover:border-gray-300 transition-colors" onClick={() => setAutoCrop(!autoCrop)}>
                     <div className="flex items-center gap-2 text-sm text-gray-700">
                         <Crop size={16} className={autoCrop ? "text-pink-500" : "text-gray-400"} />
@@ -89,15 +105,15 @@ export function Sidebar({
                             key={img.id}
                             onClick={() => onSelectImage(img.id)}
                             className={`group relative flex gap-4 p-3 rounded-2xl border transition-all cursor-pointer ${selectedImageId === img.id
-                                    ? 'bg-white border-black shadow-md ring-1 ring-black/5'
-                                    : 'bg-white border-gray-100 hover:border-gray-300 hover:shadow-sm'
+                                ? 'bg-white border-black shadow-md ring-1 ring-black/5'
+                                : 'bg-white border-gray-100 hover:border-gray-300 hover:shadow-sm'
                                 }`}
                         >
                             <div
                                 onClick={(e) => { e.stopPropagation(); onToggleSelection(img.id); }}
                                 className={`absolute top-3 left-3 w-6 h-6 rounded-full border-2 flex items-center justify-center z-10 transition-colors ${batchSelection.has(img.id)
-                                        ? 'bg-blue-500 border-blue-500 text-white'
-                                        : 'bg-white/80 border-gray-300 text-transparent hover:border-gray-400'
+                                    ? 'bg-blue-500 border-blue-500 text-white'
+                                    : 'bg-white/80 border-gray-300 text-transparent hover:border-gray-400'
                                     }`}
                             >
                                 <CheckCircle2 size={14} fill="currentColor" className={batchSelection.has(img.id) ? "text-white" : "text-transparent"} />

@@ -1,6 +1,7 @@
 export interface FoodItem {
   name: string;
   box_2d: number[]; // [ymin, xmin, ymax, xmax] 0-1000 scale
+  calories?: number; // Estimated calories for this specific item
 }
 
 export interface NutritionInfo {
@@ -8,6 +9,7 @@ export interface NutritionInfo {
   carbs: string;
   protein: string;
   fat: string;
+  vitamins?: string[]; // e.g. ["Vitamin C 20%", "Iron 10%"]
   totalWeight?: string;
 }
 
@@ -28,6 +30,8 @@ export interface ElementState {
   scale: number; // Multiplier (1.0 = default)
   text?: string; // Text content (allow editing)
   visible: boolean;
+  color?: string; // Text color
+  backgroundColor?: string; // Background color (e.g. for nutrition card)
 }
 
 export type LabelStyle = 'default' | 'pill' | 'text';
@@ -39,10 +43,15 @@ export interface LabelState extends ElementState {
   style: LabelStyle;
 }
 
+export interface LogoState extends ElementState {
+  url: string;
+}
+
 export interface ImageLayout {
   card: ElementState;
   mealType: ElementState;
   labels: LabelState[];
+  logo?: LogoState;
 }
 
 export interface LayoutConfig {
@@ -55,11 +64,18 @@ export interface LayoutConfig {
   defaultTitleY?: number;
 }
 
+export interface ModeConfig extends Required<LayoutConfig> {
+  cardBackgroundColor?: string;
+  cardTextColor?: string;
+}
+
+export type AppMode = 'scan' | 'collage' | 'nutrition';
+
 export type ProcessStatus = 'idle' | 'analyzing' | 'rendering' | 'complete' | 'error' | 'not-food';
 
 export interface ProcessedImage {
   id: string;
-  sourceMode: 'scan' | 'collage';
+  sourceMode: AppMode;
   file: File;
   previewUrl: string;
   status: ProcessStatus;
@@ -78,7 +94,7 @@ export interface CollageTransform {
 
 export interface HitRegion {
   id: number | string;
-  type: 'card' | 'title' | 'label';
+  type: 'card' | 'title' | 'label' | 'logo';
   x: number; // Pixel X on canvas
   y: number; // Pixel Y on canvas
   w: number; // Width in pixels

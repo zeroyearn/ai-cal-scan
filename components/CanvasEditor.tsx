@@ -7,6 +7,7 @@ import { EditorPanel } from './EditorPanel';
 
 interface CanvasEditorProps {
     image: ProcessedImage;
+    appMode: 'scan' | 'collage' | 'nutrition';
     onUpdateLayout: (id: string, layout: ImageLayout) => void;
     onTextEdit: (id: string, type: 'title' | 'label', itemId: number | undefined, newText: string) => void;
     onDownload: () => void;
@@ -15,6 +16,7 @@ interface CanvasEditorProps {
 
 export function CanvasEditor({
     image,
+    appMode,
     onUpdateLayout,
     onTextEdit,
     onDownload,
@@ -24,35 +26,53 @@ export function CanvasEditor({
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     const [hitRegions, setHitRegions] = useState<HitRegion[]>([]);
-    const [dragTarget, setDragTarget] = useState<{ type: 'card' | 'title' | 'label', id?: number | string } | null>(null);
+    const [dragTarget, setDragTarget] = useState<{ type: 'card' | 'title' | 'label' | 'logo', id?: number | string } | null>(null);
     const [dragOffset, setDragOffset] = useState<{ x: number, y: number } | null>(null);
     const [originalImageMeta, setOriginalImageMeta] = useState<{ w: number, h: number } | null>(null);
     const [renderScale, setRenderScale] = useState(1);
 
     // Selection State for the Editor Panel
-    const [selectedElement, setSelectedElement] = useState<{ type: 'card' | 'title' | 'label', id?: number | string } | null>(null);
+    const [selectedElement, setSelectedElement] = useState<{ type: 'card' | 'title' | 'label' | 'logo', id?: number | string } | null>(null);
 
     const { layout, analysis } = image;
 
     useEffect(() => {
         if (image.status === 'complete' && analysis && layout && canvasRef.current) {
-            const img = new Image();
-            img.src = image.previewUrl;
-            img.onload = () => {
-                const canvas = canvasRef.current;
-                if (!canvas) return;
-                canvas.width = img.width;
-                canvas.height = img.height;
-                setOriginalImageMeta({ w: img.width, h: img.height });
+            const loadAndDraw = async () => {
+                const img = new Image();
+                img.src = image.previewUrl;
+                try {
+                    await new Promise((resolve) => { img.onload = resolve; });
 
-                const ctx = canvas.getContext('2d');
-                if (ctx) {
-                    const regions = drawScene(ctx, img, analysis, layout);
-                    setHitRegions(regions);
+                    let logoImg: HTMLImageElement | null = null;
+                    if (layout.logo?.url) {
+                        logoImg = new Image();
+                        logoImg.crossOrigin = "anonymous";
+                        logoImg.src = layout.logo.url;
+                        await new Promise((resolve) => {
+                            logoImg!.onload = resolve;
+                            logoImg!.onerror = resolve;
+                        });
+                    }
+
+                    const canvas = canvasRef.current;
+                    if (!canvas) return;
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    setOriginalImageMeta({ w: img.width, h: img.height });
+
+                    const ctx = canvas.getContext('2d');
+                    if (ctx) {
+                        const regions = drawScene(ctx, img, analysis, layout, appMode, logoImg);
+                        setHitRegions(regions);
+                    }
+                } catch (e) {
+                    console.error("Failed to load images", e);
                 }
             };
+            loadAndDraw();
         }
-    }, [image.previewUrl, layout, analysis, image.status]);
+    }, [image.previewUrl, layout, analysis, image.status, appMode]);
 
     useEffect(() => {
         if (!containerRef.current || !originalImageMeta) return;
@@ -69,7 +89,7 @@ export function CanvasEditor({
 
     // -- Interaction Handlers --
 
-    const handleMouseDown = (e: React.MouseEvent, type: 'card' | 'title' | 'label', id: number | string) => {
+    const handleMouseDown = (e: React.MouseEvent, type: 'card' | 'title' | 'label' | 'logo', id: number | string) => {
         e.stopPropagation(); // Prevent clearing selection
         if (!layout || !originalImageMeta || !containerRef.current) return;
 
@@ -111,6 +131,25 @@ export function CanvasEditor({
                 newLayout.mealType = { ...newLayout.mealType, x: xPct + pctW / 2, y: yPct };
             }
         }
+        else if (dragTarget.type === 'logo' && newLayout.logo) {
+            // Center anchored
+            newLayout.logo = { ...newLayout.logo, x: xPct, y: yPct }; // Approximate, finer control needs w/h awareness or region offset
+            // For drag functionality to be precise we usually offset by initial click. 
+            // xPct/yPct are top-left based here. Logo logic in drawScene uses center. 
+            // We need to adjust. xPct is Mouse - Offset. This is Top-left of Element.
+            // If element is center-anchored, x = TopLeft + W/2.
+            // But simpler: just update x/y. The jumpiness if any is acceptable for now.
+
+            // Improve: We know hitRegions.
+            const region = hitRegions.find(r => r.type === 'logo');
+            if (region && originalImageMeta) {
+                const pctW = region.w / originalImageMeta.w;
+                const pctH = region.h / originalImageMeta.h;
+                // region x,y are top-left.
+                // layout.logo x,y should be center.
+                newLayout.logo = { ...newLayout.logo, x: xPct + pctW / 2, y: yPct + pctH / 2 };
+            }
+        }
         else if (dragTarget.type === 'label' && dragTarget.id !== undefined) {
             const region = hitRegions.find(r => r.id === dragTarget.id);
             if (region && originalImageMeta) {
@@ -129,11 +168,12 @@ export function CanvasEditor({
 
     // -- Editor Panel Handlers --
 
-    const updateScale = (type: 'card' | 'title', value: number) => {
+    const updateScale = (type: 'card' | 'title' | 'logo', value: number) => {
         if (!layout) return;
         const newLayout = { ...layout };
         if (type === 'card') newLayout.card = { ...newLayout.card, scale: value };
         else if (type === 'title') newLayout.mealType = { ...newLayout.mealType, scale: value };
+        else if (type === 'logo' && newLayout.logo) newLayout.logo = { ...newLayout.logo, scale: value };
         onUpdateLayout(image.id, newLayout);
     };
 
@@ -290,6 +330,30 @@ export function CanvasEditor({
                 onUpdateScale={updateScale}
                 onUpdateLabelScale={updateLabelScale}
                 onTextEdit={handleTextUpdate}
+                onUpdateColor={(type, color) => {
+                    const newLayout = { ...layout };
+                    if (type === 'card') {
+                        newLayout.card = { ...newLayout.card, backgroundColor: color };
+                    } else if (type === 'card-text' as any) {
+                        newLayout.card = { ...newLayout.card, color: color };
+                    }
+                    onUpdateLayout(image.id, newLayout);
+                }}
+                onUpdateLogo={(url) => {
+                    const newLayout = { ...layout };
+                    if (url) {
+                        newLayout.logo = {
+                            visible: true,
+                            x: 0.5,
+                            y: 0.5,
+                            scale: 1.0,
+                            url: url
+                        };
+                    } else {
+                        newLayout.logo = undefined;
+                    }
+                    onUpdateLayout(image.id, newLayout);
+                }}
                 onCycleStyle={cycleLabelStyle}
                 onDeleteLabel={deleteLabel}
                 onClose={() => setSelectedElement(null)}
