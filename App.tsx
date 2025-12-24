@@ -278,6 +278,21 @@ function App() {
     });
   };
 
+  const handleCollageSaveToDrive = (file: File) => {
+    drive.openFolderPicker(async (folderId, token) => {
+      drive.setIsUploading(true);
+      try {
+        const metadata = { name: file.name, mimeType: file.type, parents: [folderId] };
+        await drive.uploadFile(file, metadata, token);
+        alert(`✅ Saved collage to Drive!\nFile: ${file.name}`);
+      } catch (e: any) {
+        alert("Upload failed: " + e.message);
+      } finally {
+        drive.setIsUploading(false);
+      }
+    });
+  };
+
   const handleDownload = async () => {
     if (!selectedImage || !selectedImage.layout || !selectedImage.analysis) return;
     const url = await renderFinalImage(selectedImage.previewUrl, selectedImage.analysis, selectedImage.layout, appMode);
@@ -345,6 +360,7 @@ function App() {
             isProcessing={isCreatingCollage}
             onPickFromDrive={handleCollageDrivePicker}
             isDriveLoading={drive.isLoading}
+            onSaveToDrive={handleCollageSaveToDrive}
           /></div>
       )}
 

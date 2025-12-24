@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, X, Grid, Loader2, Image as ImageIcon, Cloud, Move, Sliders, ArrowLeftRight, Check, GripVertical } from 'lucide-react';
+import { Upload, X, Grid, Loader2, Image as ImageIcon, Cloud, Move, Trash2, Download, Save, Check } from 'lucide-react';
 import { CollageTransform } from '../types';
+import { createCollage } from '../utils/canvasUtils';
 
 interface CollageCreatorProps {
     onCreateCollage: (collages: { files: (File | null)[], transforms: CollageTransform[], padding: number }[]) => void;
@@ -8,51 +9,56 @@ interface CollageCreatorProps {
     isProcessing: boolean;
     onPickFromDrive: (callback: (files: File[]) => void) => void;
     isDriveLoading: boolean;
+    onSaveToDrive?: (file: File) => void;
 }
+
+const PRESETS = [
+    { label: 'Square (2K)', width: 2160, height: 2160 },
+    { label: 'Story (9:16)', width: 1080, height: 1920 },
+    { label: 'Portrait (4:5)', width: 1080, height: 1350 },
+    { label: 'Landscape (4K)', width: 3840, height: 2160 },
+];
+
+const COLORS = [
+    '#A855F7', // Purple
+    '#000000', // Black
+    '#FFFFFF', // White
+    '#F3F4F6', // Gray-100
+];
 
 const DEFAULT_TRANSFORM: CollageTransform = { scale: 1, x: 0, y: 0 };
 
-export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPickFromDrive, isDriveLoading }: CollageCreatorProps) {
-    const [page, setPage] = useState(0);
-    // Each group has up to 4 files. We store an array of arrays.
-    const [groups, setGroups] = useState<(File | null)[][]>([[null, null, null, null]]);
+export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPickFromDrive, isDriveLoading, onSaveToDrive }: CollageCreatorProps) {
+    // Layout State
+    const [width, setWidth] = useState(2160);
+    const [height, setHeight] = useState(2160);
+    const [padding, setPadding] = useState(40);
+    const [backgroundColor, setBackgroundColor] = useState('#FFFFFF');
 
-    // Transforms need to be tracked PER GROUP. 
-    // Array of arrays of transforms.
-    const [transformsMap, setTransformsMap] = useState<CollageTransform[][]>([Array(4).fill(DEFAULT_TRANSFORM)]);
+    // Data State (Single Page)
+    const [slots, setSlots] = useState<(File | null)[]>([null, null, null, null]);
+    const [transforms, setTransforms] = useState<CollageTransform[]>([DEFAULT_TRANSFORM, DEFAULT_TRANSFORM, DEFAULT_TRANSFORM, DEFAULT_TRANSFORM]);
 
-    // Reordering State
-    const [isReordering, setIsReordering] = useState(false);
-    const [reorderList, setReorderList] = useState<File[]>([]);
-    const [draggingId, setDraggingId] = useState<number | null>(null);
-
-    const [padding, setPadding] = useState(0); // 0 to 50 range
-
-    // Current derived state
-    const slots = groups[page] || [null, null, null, null];
-    const transforms = transformsMap[page] || Array(4).fill(DEFAULT_TRANSFORM);
-
-    const setSlots = (newSlots: (File | null)[]) => {
-        setGroups(prev => {
-            const next = [...prev];
-            next[page] = newSlots;
-            return next;
-        });
-    };
-
-    const setTransforms = (updater: (prev: CollageTransform[]) => CollageTransform[]) => {
-        setTransformsMap(prev => {
-            const next = [...prev];
-            const current = next[page] || Array(4).fill(DEFAULT_TRANSFORM);
-            next[page] = updater(current);
-            return next;
-        });
-    };
+    // UI State
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [activePreset, setActivePreset] = useState('Square (2K)');
 
     // Interaction State
-    const [dragging, setDragging] = useState<{ idx: number, startX: number, startY: number, initX: number, initY: number } | null>(null);
-    const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
     const fileInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+    const [dragging, setDragging] = useState<{ idx: number, startX: number, startY: number, initX: number, initY: number } | null>(null);
+
+    // --- Helpers ---
+    const updateSlot = (index: number, file: File | null) => {
+        const newSlots = [...slots];
+        newSlots[index] = file;
+        setSlots(newSlots);
+
+        if (file) {
+            const newTransforms = [...transforms];
+            newTransforms[index] = { ...DEFAULT_TRANSFORM };
+            setTransforms(newTransforms);
+        }
+    };
 
     const handleFileChange = (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -60,107 +66,22 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
         }
     };
 
-    const updateSlot = (index: number, file: File | null) => {
-        const newSlots = [...slots];
-        newSlots[index] = file;
-        setSlots(newSlots);
-
-        // Reset transform for this slot
-        const newTransforms = [...transforms];
-        newTransforms[index] = { ...DEFAULT_TRANSFORM };
-        setTransforms(() => newTransforms);
-    };
-
     const handleDrop = (index: number, e: React.DragEvent) => {
         e.preventDefault();
         if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            const file = e.dataTransfer.files[0];
-            if (file.type.startsWith('image/')) {
-                updateSlot(index, file);
+            if (e.dataTransfer.files[0].type.startsWith('image/')) {
+                updateSlot(index, e.dataTransfer.files[0]);
             }
         }
     };
 
-    // --- Reorder Logic ---
-    const handleStartReorder = () => {
-        // Flatten all groups into a single list of files (filtering out nulls? No, keep nulls as placeholders? 
-        // Better to filter out nulls for easier sorting, then fill pages.
-        // Or keep nulls to preserve empty slots? 
-        // User asked to "specify 4 images as a group".
-        // Best UX: Flatten and Filter out nulls. Then filling pages fills them sequentially.
-        const flat = groups.flat().filter((f): f is File => f !== null);
-        setReorderList(flat);
-        setIsReordering(true);
-    };
-
-    const handleSaveReorder = () => {
-        // Re-chunk the list into groups of 4
-        const newGroups: (File | null)[][] = [];
-        const newTransformsMap: CollageTransform[][] = [];
-
-        const files = reorderList;
-        let idx = 0;
-
-        while (idx < files.length) {
-            const chunk = files.slice(idx, idx + 4);
-            // Pad chunk with nulls if needed
-            const pageSlots = Array(4).fill(null);
-            chunk.forEach((f, i) => pageSlots[i] = f);
-            newGroups.push(pageSlots);
-
-            // Reset transforms for re-ordered items (safer than trying to map old transforms)
-            newTransformsMap.push(Array(4).fill(DEFAULT_TRANSFORM).map(() => ({ ...DEFAULT_TRANSFORM })));
-
-            idx += 4;
-        }
-
-        if (newGroups.length === 0) {
-            newGroups.push([null, null, null, null]);
-            newTransformsMap.push(Array(4).fill(DEFAULT_TRANSFORM));
-        }
-
-        setGroups(newGroups);
-        setTransformsMap(newTransformsMap);
-        setPage(0); // Go back to start
-        setIsReordering(false);
-    };
-
-    const onDragStart = (e: React.DragEvent, index: number) => {
-        setDraggingId(index);
-        e.dataTransfer.effectAllowed = "move";
-        // Ghost image logic handled by browser usually
-    };
-
-    const onDragOver = (e: React.DragEvent, index: number) => {
-        e.preventDefault();
-        if (draggingId === null || draggingId === index) return;
-
-        // Swap locally for visual feedback
-        const newList = [...reorderList];
-        const item = newList[draggingId];
-        newList.splice(draggingId, 1);
-        newList.splice(index, 0, item);
-
-        setReorderList(newList);
-        setDraggingId(index);
-    };
-
-    const onDragEnd = () => {
-        setDraggingId(null);
-    };
-
-    // --- Interaction Handlers ---
-
+    // --- Transforms ---
     const handleWheel = (index: number, e: React.WheelEvent) => {
         if (!slots[index]) return;
         e.preventDefault();
         const delta = -e.deltaY * 0.001;
-
         setTransforms(prev => {
             const next = [...prev];
-            // Clamp scale:
-            // Min 0.1 (allows zooming out to fit large images)
-            // Max 5 (allows zooming in for details)
             const newScale = Math.min(Math.max(next[index].scale + delta, 0.1), 5);
             next[index] = { ...next[index], scale: newScale };
             return next;
@@ -183,24 +104,33 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
         const handleMouseMove = (e: MouseEvent) => {
             if (!dragging) return;
             const { idx, startX, startY, initX, initY } = dragging;
+            // Normalize movement based on container size? 
+            // Currently transforms x/y are normalized to "GRID_SIZE" inside createCollage?
+            // Wait, createCollage uses t.x * GRID_SIZE. 
+            // Here we want visual feedback to match.
+            // If we move 100px on screen, how much is that in T.x?
+            // It depends on the rendered size vs actual size.
+            // Let's rely on a rough sensitivity factor or correct normalization.
+            // Simplified: Just use raw movements and rely on "visual" feel.
 
-            const dx = e.clientX - startX;
-            const dy = e.clientY - startY;
+            // To be precise: If preview is 500px, 1px move is 1/250 of a grid cell (if 2x2).
+            // T.x = 1 means shift by full GRID_SIZE.
+            // So dx should be divided by (RenderedCellWidth).
+            // Let's approximate RenderedCellWidth.
+            // We can grab it from Ref? or just guess ~200px.
+            const sensitivity = 0.003;
+
+            const dx = (e.clientX - startX) * sensitivity;
+            const dy = (e.clientY - startY) * sensitivity;
 
             setTransforms(prev => {
                 const next = [...prev];
-                next[idx] = {
-                    ...next[idx],
-                    x: initX + dx,
-                    y: initY + dy
-                };
+                next[idx] = { ...next[idx], x: initX + dx, y: initY + dy };
                 return next;
             });
         };
 
-        const handleMouseUp = () => {
-            setDragging(null);
-        };
+        const handleMouseUp = () => setDragging(null);
 
         if (dragging) {
             window.addEventListener('mousemove', handleMouseMove);
@@ -213,330 +143,293 @@ export function CollageCreator({ onCreateCollage, onCancel, isProcessing, onPick
     }, [dragging]);
 
 
-    const filledCount = slots.filter(Boolean).length;
-    const canCreate = filledCount >= 1;
+    // --- Actions ---
+    const handleGenerate = async (): Promise<File> => {
+        // Prepare transforms. 
+        // Note: Our transforms are roughly normalized (0-1 range logic from wheel/drag).
+        // createCollage expects t.x to be multiplier of GRID_SIZE.
+        // My drag logic uses arbitrary sensitivity. It might need tuning.
+        return await createCollage(slots, transforms, width, height, padding, backgroundColor);
+    };
+
+    const onDownload = async () => {
+        setIsGenerating(true);
+        try {
+            const file = await handleGenerate();
+            const url = URL.createObjectURL(file);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = file.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error(e);
+            alert("Failed to generate collage");
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+
+    const onSave = async () => {
+        if (!onSaveToDrive) return;
+        setIsGenerating(true);
+        try {
+            const file = await handleGenerate();
+            onSaveToDrive(file);
+        } catch (e) {
+            console.error(e);
+            alert("Failed to generate collage");
+        } finally {
+            setIsGenerating(false);
+        }
+    };
 
     return (
-        <div className="flex-1 flex flex-col h-full bg-gray-50 overflow-hidden relative">
+        <div className="fixed inset-0 z-50 bg-white flex overflow-hidden font-sans text-gray-900">
+            {/* Left Sidebar: Controls */}
+            <div className="w-96 border-r border-gray-200 flex flex-col bg-white shadow-xl z-20">
+                <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+                    <h2 className="text-xl font-bold flex items-center gap-2 text-purple-600">
+                        <Grid fill="currentColor" className="text-purple-100" /> Collage
+                    </h2>
+                    <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors">
+                        <X size={20} />
+                    </button>
+                </div>
 
-            {/* Reorder Overlay */}
-            {isReordering && (
-                <div className="absolute inset-0 z-50 bg-white/95 backdrop-blur-sm flex flex-col animate-in fade-in duration-200">
-                    <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white shadow-sm">
-                        <div>
-                            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                                <ArrowLeftRight className="text-blue-600" />
-                                Reorder Images
-                            </h3>
-                            <p className="text-xs text-gray-500">Drag images to change their order & pagination</p>
-                        </div>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => setIsReordering(false)}
-                                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleSaveReorder}
-                                className="px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg flex items-center gap-2"
-                            >
-                                <Check size={16} /> Done
-                            </button>
-                        </div>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-8">
-                        <div className="flex flex-wrap gap-4 justify-center max-w-4xl mx-auto pb-20">
-                            {reorderList.map((file, i) => (
-                                <div
-                                    key={i}
-                                    draggable
-                                    onDragStart={(e) => onDragStart(e, i)}
-                                    onDragOver={(e) => onDragOver(e, i)}
-                                    onDragEnd={onDragEnd}
-                                    className={`relative w-24 h-24 rounded-lg overflow-hidden border-2 cursor-move transition-all
-                                        ${draggingId === i ? 'opacity-50 border-blue-400 scale-95' : 'border-gray-200 hover:border-blue-400 hover:shadow-md'}
-                                    `}
+                <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                    {/* Output Size */}
+                    <div className="space-y-3">
+                        <label className="text-sm font-bold text-gray-800">Output Size</label>
+                        <div className="grid grid-cols-2 gap-2">
+                            {PRESETS.map(p => (
+                                <button
+                                    key={p.label}
+                                    onClick={() => {
+                                        setWidth(p.width);
+                                        setHeight(p.height);
+                                        setActivePreset(p.label);
+                                    }}
+                                    className={`px-3 py-2 text-xs font-medium rounded-lg border transition-all
+                                        ${activePreset === p.label
+                                            ? 'border-purple-600 bg-purple-50 text-purple-700'
+                                            : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                                        }`}
                                 >
-                                    <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] w-5 h-5 flex items-center justify-center rounded-full pointer-events-none z-10">
-                                        {i + 1}
-                                    </div>
-                                    <img src={URL.createObjectURL(file)} className="w-full h-full object-cover pointer-events-none" />
-
-                                    {/* Page Break indicator */}
-                                    {(i + 1) % 4 === 0 && i !== reorderList.length - 1 && (
-                                        <div className="absolute -right-5 top-1/2 -translate-y-1/2 w-6 h-8 border-r-2 border-dashed border-gray-300 z-0"></div>
-                                    )}
-                                </div>
+                                    {p.label}
+                                </button>
                             ))}
                         </div>
                     </div>
-                </div>
-            )}
 
-            <div className="absolute inset-0 flex items-center justify-center p-8">
-                <div className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col h-[85vh]">
-
-                    {/* Header */}
-                    <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white sticky top-0 z-10">
-                        <div>
-                            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                                <Grid className="text-purple-600" />
-                                Collage Mode
-                            </h2>
-                            <p className="text-sm text-gray-500">
-                                Drag to pan • Scroll to zoom • {filledCount}/4 filled
-                            </p>
+                    {/* Dimensions */}
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                            <label className="text-xs text-gray-500 font-medium">Width</label>
+                            <input
+                                type="number"
+                                value={width}
+                                onChange={(e) => {
+                                    setWidth(Number(e.target.value));
+                                    setActivePreset('Custom');
+                                }}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-purple-500 outline-none transition-all"
+                            />
                         </div>
-                        <button onClick={onCancel} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
-                            <X size={20} />
-                        </button>
+                        <div className="space-y-1">
+                            <label className="text-xs text-gray-500 font-medium">Height</label>
+                            <input
+                                type="number"
+                                value={height}
+                                onChange={(e) => {
+                                    setHeight(Number(e.target.value));
+                                    setActivePreset('Custom');
+                                }}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-purple-500 outline-none transition-all"
+                            />
+                        </div>
                     </div>
 
-                    {/* Grid Area */}
-                    <div className="flex-1 p-6 overflow-hidden flex flex-col bg-gray-50">
-                        {/* The Grid itself has a gap, but we want dynamic padding INSIDE dimensions or OUTSIDE? 
-                            If strict grid 2048x2048, "padding" usually means gap between images.
-                            For preview accuracy, we can apply padding to the container div.
-                        */}
-                        <div className="grid grid-cols-2 h-full min-h-0 bg-white shadow-sm border border-gray-200"
-                            style={{ gap: `${padding}px`, padding: `${padding}px`, transition: 'all 0.2s' }}>
-                            {slots.map((file, index) => (
+                    {/* Padding */}
+                    <div className="space-y-3">
+                        <div className="flex justify-between">
+                            <label className="text-sm font-bold text-gray-800">Padding</label>
+                            <span className="text-xs text-gray-500">{padding}px</span>
+                        </div>
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            value={padding}
+                            onChange={(e) => setPadding(Number(e.target.value))}
+                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                        />
+                    </div>
+
+                    {/* Background Color */}
+                    <div className="space-y-3">
+                        <label className="text-sm font-bold text-gray-800">Background Color</label>
+                        <div className="flex gap-3">
+                            {COLORS.map(c => (
+                                <button
+                                    key={c}
+                                    onClick={() => setBackgroundColor(c)}
+                                    className={`w-10 h-10 rounded-full border-2 shadow-sm flex items-center justify-center transition-transform hover:scale-105
+                                        ${backgroundColor === c ? 'border-purple-600 ring-2 ring-purple-100' : 'border-gray-200'}`}
+                                    style={{ backgroundColor: c }}
+                                >
+                                    {backgroundColor === c && <Check size={16} className={c === '#FFFFFF' || c === '#F3F4F6' ? 'text-black' : 'text-white'} />}
+                                </button>
+                            ))}
+                            <div className="relative">
+                                <input
+                                    type="color"
+                                    value={backgroundColor}
+                                    onChange={(e) => setBackgroundColor(e.target.value)}
+                                    className="w-10 h-10 rounded-full overflow-hidden border-0 p-0 cursor-pointer opacity-0 absolute"
+                                />
+                                <div className="w-10 h-10 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 pointer-events-none bg-white">
+                                    <span className="text-[10px]">+</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="p-6 border-t border-gray-100 bg-gray-50 space-y-3">
+                    <button
+                        onClick={onDownload}
+                        disabled={isGenerating || slots.every(s => s === null)}
+                        className="w-full py-3 bg-black text-white rounded-xl font-bold shadow-lg shadow-gray-200 hover:bg-gray-800 hover:shadow-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isGenerating ? <Loader2 className="animate-spin" size={20} /> : <Download size={20} />}
+                        Download Image
+                    </button>
+                    {onSaveToDrive && (
+                        <button
+                            onClick={onSave}
+                            disabled={isGenerating || slots.every(s => s === null)}
+                            className="w-full py-3 bg-white border border-gray-200 text-gray-700 rounded-xl font-bold hover:bg-gray-50 hover:border-gray-300 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isDriveLoading ? <Loader2 className="animate-spin" size={20} /> : <Cloud size={20} />}
+                            Save to Drive
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* Right: Preview Area */}
+            <div className="flex-1 bg-gray-100 flex items-center justify-center p-8 overflow-hidden relative">
+                {/* Dotted Pattern Background */}
+                <div className="absolute inset-0 opacity-[0.03] pointer-events-none"
+                    style={{ backgroundImage: 'radial-gradient(#000 1px, transparent 1px)', backgroundSize: '20px 20px' }}
+                />
+
+                {/* The Canvas Container */}
+                <div
+                    className="relative shadow-2xl bg-white transition-all duration-300 ease-in-out"
+                    style={{
+                        backgroundColor,
+                        aspectRatio: `${width} / ${height}`,
+                        height: 'min(90%, 90vw)',
+                        maxHeight: '800px',
+                        maxWidth: '100%',
+                        padding: `${padding}px`, // Visual padding simulation? 
+                        // Wait, padding in createCollage is internal to grid cells if we follow the code. 
+                        // But user UI shows "Padding" slider. Usually creates gaps.
+                        // My createCollage uses padding as INSET. 
+                        // To simulate visual fidelity, we should replicate the grid logic here.
+                    }}
+                >
+                    {/* The Grid */}
+                    <div className="w-full h-full grid grid-cols-2 grid-rows-2">
+                        {slots.map((file, index) => (
+                            <div
+                                key={index}
+                                className="relative overflow-hidden group border border-dashed border-gray-200/50 hover:border-purple-300/50 transition-colors"
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={(e) => handleDrop(index, e)}
+                                style={{
+                                    padding: `${(padding / width) * 100}%` // Approximate padding simulation for visual preview relative to container width?
+                                    // Actually, createCollage uses pixel padding. 
+                                    // If preview container is scaled down, padding should scale down too.
+                                    // Best way: Use CSS padding on the CELL div.
+                                    // But I need to map "padding pixels" to "CSS percentage" or "CSS px scaled".
+                                    // Since container is sized by CSS, we can't easily use px directly unless we know container px.
+                                    // WORKAROUND: Use percentage based on Width state.
+                                    // padding_pct = padding / (width/2) * 100% ? No.
+                                    // Padding adds spacing around image inside cell.
+                                }}
+                            >
+                                {/* Inner Content Box (Simulates fit area) */}
                                 <div
-                                    key={index}
-                                    ref={el => containerRefs.current[index] = el}
-                                    onDragOver={(e) => e.preventDefault()}
-                                    onDrop={(e) => handleDrop(index, e)}
-                                    className={`relative group overflow-hidden flex items-center justify-center bg-gray-100 transition-colors
-                                        ${file ? '' : 'hover:bg-purple-50'}`}
+                                    className="w-full h-full relative overflow-hidden bg-gray-50/50"
+                                    style={{
+                                        margin: `${(padding / width) * 200}%` // Hacky approximation: padding is px. width is px. 
+                                        // If width=2000, padding=40. 40/2000 = 2%. 
+                                        // Grid cell is 1000px. Padding 40px is 4% of cell.
+                                        // So margin = (padding / (width/2)) * 100 %
+                                    }}
                                 >
                                     {file ? (
                                         <div
-                                            className="absolute inset-0 cursor-move touch-none"
-                                            onWheel={(e) => handleWheel(index, e)}
+                                            className="w-full h-full relative cursor-move"
                                             onMouseDown={(e) => handleMouseDown(index, e)}
+                                            onWheel={(e) => handleWheel(index, e)}
                                         >
-                                            <div
-                                                className="w-full h-full relative"
+                                            <img
+                                                src={URL.createObjectURL(file)}
+                                                className="w-full h-full object-contain pointer-events-none select-none"
                                                 style={{
-                                                    transform: `translate(${transforms[index].x}px, ${transforms[index].y}px) scale(${transforms[index].scale})`,
-                                                    transformOrigin: 'center center',
-                                                    transition: dragging?.idx === index ? 'none' : 'transform 0.1s ease-out'
+                                                    transform: `translate(${transforms[index].x * 100}%, ${transforms[index].y * 100}%) scale(${transforms[index].scale})`,
                                                 }}
+                                            />
+                                            <button
+                                                onClick={() => updateSlot(index, null)}
+                                                className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
                                             >
-                                                <img
-                                                    src={URL.createObjectURL(file)}
-                                                    alt={`Slot ${index + 1}`}
-                                                    className="w-full h-full object-contain pointer-events-none select-none"
-                                                />
-                                            </div>
-
-                                            {/* Overlay controls (delete) */}
-                                            <div className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); updateSlot(index, null); }}
-                                                    className="p-1.5 bg-black/50 hover:bg-black/70 text-white rounded-full backdrop-blur-sm transition-all"
-                                                >
-                                                    <X size={16} />
-                                                </button>
-                                            </div>
-
-                                            {/* Visual Guide for Interaction */}
-                                            <div className="absolute bottom-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                                                <div className="bg-black/50 text-white text-[10px] px-2 py-1 rounded-full backdrop-blur-sm flex items-center gap-1">
-                                                    <Move size={10} /> Pan & Zoom
-                                                </div>
-                                            </div>
+                                                <X size={12} />
+                                            </button>
                                         </div>
                                     ) : (
-                                        <div className="text-center cursor-pointer p-4 w-full h-full flex flex-col items-center justify-center relative border-2 border-dashed border-gray-200 hover:border-purple-300">
-                                            <div
-                                                onClick={() => fileInputRefs.current[index]?.click()}
-                                                className="w-full h-full flex flex-col items-center justify-center"
-                                            >
-                                                <div className="w-10 h-10 rounded-full bg-white mb-2 flex items-center justify-center shadow-sm">
-                                                    <Upload size={18} className="text-gray-400 group-hover:text-purple-600" />
-                                                </div>
-                                                <p className="text-xs font-medium text-gray-500 group-hover:text-purple-700">Add Image</p>
-                                            </div>
+                                        <div
+                                            className="w-full h-full flex flex-col items-center justify-center cursor-pointer hover:bg-purple-50 transition-colors"
+                                            onClick={() => fileInputRefs.current[index]?.click()}
+                                        >
+                                            <Upload size={24} className="text-gray-300" />
+                                            <span className="text-[10px] text-gray-400 font-medium mt-2">Add Image</span>
 
                                             <button
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     onPickFromDrive((files) => {
-                                                        if (files && files.length > 0) {
-                                                            // Split files into chunks of 4
-                                                            const newGroups = [...groups];
-                                                            const newTransformsMap = [...transformsMap];
-
-                                                            let currentFileIdx = 0;
-
-                                                            // Fill current page first
-                                                            let currentPageInfo = [...(newGroups[page] || [null, null, null, null])];
-                                                            let currentTransformInfo = [...(newTransformsMap[page] || Array(4).fill({ ...DEFAULT_TRANSFORM }))];
-
-                                                            for (let i = index; i < 4 && currentFileIdx < files.length; i++) {
-                                                                if (!currentPageInfo[i]) {
-                                                                    currentPageInfo[i] = files[currentFileIdx];
-                                                                    currentTransformInfo[i] = { ...DEFAULT_TRANSFORM };
-                                                                    currentFileIdx++;
-                                                                }
-                                                            }
-
-                                                            newGroups[page] = currentPageInfo;
-                                                            newTransformsMap[page] = currentTransformInfo;
-
-                                                            // If we have more files, create new pages
-                                                            while (currentFileIdx < files.length) {
-                                                                const chunk = files.slice(currentFileIdx, currentFileIdx + 4);
-                                                                const pageSlots = Array(4).fill(null);
-                                                                chunk.forEach((f, i) => pageSlots[i] = f);
-
-                                                                const pageTransforms = Array(4).fill(DEFAULT_TRANSFORM).map(() => ({ ...DEFAULT_TRANSFORM }));
-
-                                                                newGroups.push(pageSlots);
-                                                                newTransformsMap.push(pageTransforms);
-                                                                currentFileIdx += 4;
-                                                            }
-
-                                                            setGroups(newGroups);
-                                                            setTransformsMap(newTransformsMap);
+                                                        const newSlots = [...slots];
+                                                        let fileIdx = 0;
+                                                        // Fill from this index onwards
+                                                        for (let i = index; i < 4 && fileIdx < files.length; i++) {
+                                                            if (!newSlots[i]) newSlots[i] = files[fileIdx++];
                                                         }
+                                                        setSlots(newSlots);
                                                     });
                                                 }}
-                                                disabled={isDriveLoading}
-                                                className="absolute bottom-2 right-2 p-1.5 bg-white hover:bg-gray-50 text-gray-400 hover:text-blue-600 rounded-md shadow-sm border border-gray-200 transition-colors z-20"
+                                                className="absolute bottom-2 right-2 p-1.5 bg-white border border-gray-200 rounded-md text-gray-400 hover:text-blue-600 shadow-sm z-10"
                                             >
-                                                {isDriveLoading ? <Loader2 className="animate-spin" size={14} /> : <Cloud size={14} />}
+                                                <Cloud size={14} />
                                             </button>
                                         </div>
                                     )}
-                                    <input
-                                        type="file"
-                                        ref={el => fileInputRefs.current[index] = el}
-                                        className="hidden"
-                                        accept="image/*"
-                                        onChange={(e) => handleFileChange(index, e)}
-                                    />
                                 </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Footer / Controls */}
-                    <div className="p-4 bg-white border-t border-gray-100 flex flex-col gap-4">
-
-                        {/* Spacing Control */}
-                        <div className="flex items-center gap-4 px-2">
-                            <div className="flex items-center gap-2 text-gray-600 w-24 shrink-0">
-                                <Sliders size={16} />
-                                <span className="text-sm font-medium">Spacing</span>
+                                <input
+                                    type="file"
+                                    className="hidden"
+                                    accept="image/*"
+                                    ref={el => fileInputRefs.current[index] = el}
+                                    onChange={(e) => handleFileChange(index, e)}
+                                />
                             </div>
-                            <input
-                                type="range"
-                                min="0"
-                                max="50"
-                                value={padding}
-                                onChange={(e) => setPadding(Number(e.target.value))}
-                                className="flex-1 h-2 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-purple-600"
-                            />
-                            <span className="text-xs text-gray-400 w-8 text-right">{padding}</span>
-                        </div>
-
-                        <div className="flex justify-between items-center pt-2 border-t border-gray-50">
-                            <span className="text-xs text-gray-400">
-                                {filledCount}/4 slots filled
-                            </span>
-
-                            <div className="flex gap-3">
-                                {groups.length > 1 && (
-                                    <div className="flex items-center gap-1 mr-2">
-                                        <button
-                                            onClick={() => setPage(p => Math.max(0, p - 1))}
-                                            disabled={page === 0}
-                                            className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"
-                                        >
-                                            Previous
-                                        </button>
-                                        <span className="text-sm font-medium text-gray-600">
-                                            Page {page + 1} / {groups.length}
-                                        </span>
-                                        <button
-                                            onClick={() => setPage(p => Math.min(groups.length - 1, p + 1))}
-                                            disabled={page === groups.length - 1}
-                                            className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"
-                                        >
-                                            Next
-                                        </button>
-                                    </div>
-                                )}
-
-                                {groups.length > 0 && groups.some(g => g.some(Boolean)) && (
-                                    <button
-                                        onClick={handleStartReorder}
-                                        className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg mr-2 transition-colors"
-                                        title="Reorder all images"
-                                    >
-                                        <ArrowLeftRight size={20} />
-                                    </button>
-                                )}
-
-                                <button
-                                    onClick={onCancel}
-                                    className="px-5 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-all"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        // Normalize transforms for ALL groups
-                                        const batchConfigs = groups.map((groupSlots, groupIdx) => {
-                                            const groupTransforms = transformsMap[groupIdx];
-
-                                            const normalizedTransforms = groupTransforms.map((t, i) => {
-                                                const el = containerRefs.current[i];
-                                                if (el) {
-                                                    const { width, height } = el.getBoundingClientRect();
-                                                    return {
-                                                        scale: t.scale,
-                                                        x: t.x / width,
-                                                        y: t.y / height
-                                                    };
-                                                }
-                                                return t;
-                                            });
-
-                                            const slot0 = containerRefs.current[0];
-                                            let normalizedPadding = 0;
-                                            if (slot0) {
-                                                const { width } = slot0.getBoundingClientRect();
-                                                normalizedPadding = padding / width;
-                                            }
-
-                                            return {
-                                                files: groupSlots,
-                                                transforms: normalizedTransforms,
-                                                padding: normalizedPadding
-                                            };
-                                        });
-
-                                        const validBatch = batchConfigs.filter(b => b.files.some(f => f !== null));
-
-                                        if (validBatch.length > 0) {
-                                            onCreateCollage(validBatch);
-                                        }
-                                    }}
-                                    disabled={!canCreate || isProcessing}
-                                    className={`px-6 py-2 text-sm font-bold text-white rounded-lg shadow-md flex items-center gap-2 transition-all transform active:scale-95
-                                        ${!canCreate || isProcessing
-                                            ? 'bg-gray-300 shadow-none cursor-not-allowed'
-                                            : 'bg-indigo-600 hover:bg-indigo-700'}`}
-                                >
-                                    {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <ImageIcon size={16} />}
-                                    {isProcessing ? `Create ${groups.length > 1 ? 'All' : 'Collage'}` : `Create ${groups.length > 1 ? 'All (' + groups.length + ')' : 'Collage'}`}
-                                </button>
-                            </div>
-                        </div>
+                        ))}
                     </div>
                 </div>
             </div>

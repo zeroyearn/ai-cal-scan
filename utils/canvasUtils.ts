@@ -625,20 +625,24 @@ export const resizeImage = async (file: File, maxDimension: number = 1024, cropT
 };
 
 // Already exported
-export const createCollage = async (files: (File | null)[], transforms: CollageTransform[] = [], padding: number = 0): Promise<File> => {
-  const CANVAS_SIZE = 2048; // High res for good analysis
-  const GRID_SIZE = CANVAS_SIZE / 2;
-
+export const createCollage = async (
+  files: (File | null)[],
+  transforms: CollageTransform[] = [],
+  width: number = 2048,
+  height: number = 2048,
+  padding: number = 0,
+  backgroundColor: string = '#ffffff'
+): Promise<File> => {
   const canvas = document.createElement('canvas');
-  canvas.width = CANVAS_SIZE;
-  canvas.height = CANVAS_SIZE;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext('2d');
 
   if (!ctx) throw new Error("Could not create collage canvas");
 
-  // Fill white background
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+  // Fill background
+  ctx.fillStyle = backgroundColor;
+  ctx.fillRect(0, 0, width, height);
 
   const loadImage = (file: File): Promise<HTMLImageElement> => {
     return new Promise((resolve, reject) => {
@@ -650,65 +654,66 @@ export const createCollage = async (files: (File | null)[], transforms: CollageT
     });
   };
 
-  // Draw each image into its quadrant (crop to square to fit perfectly)
+  const GRID_W = width / 2;
+  const GRID_H = height / 2;
+
+  // Draw each image into its quadrant
   for (let i = 0; i < 4; i++) {
     const file = files[i];
-    if (!file) {
-      continue;
-    }
+    if (!file) continue;
 
-    // Default transform if missing
     const t = transforms[i] || { scale: 1, x: 0, y: 0 };
 
     try {
       const img = await loadImage(file);
 
-      // Calculate grid position
-      const dx = (i % 2) * GRID_SIZE;
-      const dy = Math.floor(i / 2) * GRID_SIZE;
-      const moveX = t.x * GRID_SIZE;
-      const moveY = t.y * GRID_SIZE;
+      // Grid Position
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const dx = col * GRID_W;
+      const dy = row * GRID_H;
 
-      // Calculate Spacing/Padding Inset (padding is percentage of slot width)
-      const inset = GRID_SIZE * padding;
-      const contentSize = GRID_SIZE - (2 * inset);
+      const moveX = t.x * GRID_W;
+      const moveY = t.y * GRID_H;
 
-      // Calculate "Fit" (Contain) Base Scaling within the content area
-      // Image must fit into contentSize x contentSize
-      const baseScale = Math.min(contentSize / img.width, contentSize / img.height);
+      // Padding is raw pixels from edge of cell
+      // Content Box:
+      const contentX = dx + padding;
+      const contentY = dy + padding;
+      const contentW = GRID_W - (padding * 2);
+      const contentH = GRID_H - (padding * 2);
+
+      if (contentW <= 0 || contentH <= 0) continue;
+
+      // Fit Image (Contain)
+      const scaleW = contentW / img.width;
+      const scaleH = contentH / img.height;
+      const baseScale = Math.min(scaleW, scaleH);
+
       const drawW = img.width * baseScale;
       const drawH = img.height * baseScale;
 
-      // Center the fitted image in the quadrant (accounting for inset)
-      // Top-Left of content area is (dx + inset, dy + inset)
-      // Center of content area is (dx + inset + contentSize/2) === (dx + GRID/2)
-      // So center is same.
-      // Top-Left of image relative to quadrant origin (dx, dy):
-      // x = inset + (contentSize - drawW)/2
-      const imgX = inset + (contentSize - drawW) / 2;
-      const imgY = inset + (contentSize - drawH) / 2;
-
+      // Center in content box
+      const imgX = contentX + (contentW - drawW) / 2;
+      const imgY = contentY + (contentH - drawH) / 2;
 
       ctx.save();
 
-      // Clip to Content Area (respecting padding)
+      // Clip to Content Box
       ctx.beginPath();
-      ctx.rect(dx + inset, dy + inset, contentSize, contentSize);
+      ctx.rect(contentX, contentY, contentW, contentH);
       ctx.clip();
 
-      // Move to Center of Quadrant to apply transform
-      ctx.translate(dx + GRID_SIZE / 2, dy + GRID_SIZE / 2);
+      // Transform Origin: Center of Grid Cell
+      const centerX = dx + GRID_W / 2;
+      const centerY = dy + GRID_H / 2;
 
-      // Apply User Pan/Zoom
+      ctx.translate(centerX, centerY);
       ctx.translate(moveX, moveY);
       ctx.scale(t.scale, t.scale);
+      ctx.translate(-centerX, -centerY);
 
-      // Move back to draw space (relative to quadrant center)
-      ctx.translate(-GRID_SIZE / 2, -GRID_SIZE / 2);
-
-      // Draw the full image fitted
       ctx.drawImage(img, 0, 0, img.width, img.height, imgX, imgY, drawW, drawH);
-
       ctx.restore();
 
     } catch (e) {
